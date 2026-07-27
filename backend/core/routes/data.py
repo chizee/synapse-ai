@@ -120,7 +120,7 @@ async def _get_github_token() -> "str | None":
         hosts_path = config_dir / "hosts.json"
         if hosts_path.exists():
             try:
-                data = _json.loads(hosts_path.read_text())
+                data = _json.loads(hosts_path.read_text(encoding="utf-8"))
                 t = (data.get("github.com", {}).get("oauth_token")
                      or data.get("github.com", {}).get("token"))
                 if t:
@@ -131,7 +131,7 @@ async def _get_github_token() -> "str | None":
     config_path = Path.home() / ".copilot" / "config.json"
     if config_path.exists():
         try:
-            data = _json.loads(config_path.read_text())
+            data = _json.loads(config_path.read_text(encoding="utf-8"))
             if t := (data.get("oauth_token") or data.get("token")):
                 return t
         except Exception:
@@ -839,7 +839,7 @@ async def clear_memory_items(req: MemoryClearRequest):
         repos = []
         if os.path.exists(repos_path):
             try:
-                with open(repos_path) as f:
+                with open(repos_path, encoding="utf-8") as f:
                     repos = json.load(f)
             except Exception:
                 pass
@@ -849,7 +849,7 @@ async def clear_memory_items(req: MemoryClearRequest):
                 drop_index(repo["id"])
             except Exception as e:
                 print(f"Error dropping index for repo {repo.get('id')}: {e}")
-        with open(repos_path, "w") as f:
+        with open(repos_path, "w", encoding="utf-8") as f:
             json.dump([], f)
         results["repos"] = f"Cleared {len(repos)} repo(s)"
 
@@ -859,11 +859,11 @@ async def clear_memory_items(req: MemoryClearRequest):
         configs = []
         if os.path.exists(configs_path):
             try:
-                with open(configs_path) as f:
+                with open(configs_path, encoding="utf-8") as f:
                     configs = json.load(f)
             except Exception:
                 pass
-        with open(configs_path, "w") as f:
+        with open(configs_path, "w", encoding="utf-8") as f:
             json.dump([], f)
         results["db_configs"] = f"Cleared {len(configs)} config(s)"
 

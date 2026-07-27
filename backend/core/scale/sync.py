@@ -188,7 +188,7 @@ async def sync_mcp_servers_to_pg(
     Sensitive fields (token) are stripped before storing."""
     try:
         from core.mcp_client import MCP_SERVERS_FILE
-        with open(MCP_SERVERS_FILE) as f:
+        with open(MCP_SERVERS_FILE, encoding="utf-8") as f:
             items = json.load(f)
         if not isinstance(items, list):
             items = []

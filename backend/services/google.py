@@ -85,10 +85,10 @@ def _sync_token_to_mcp(token_data: dict, email: str | None = None) -> None:
     """Mirror token.json into google-credentials/ so workspace-mcp sees fresh creds."""
     try:
         os.makedirs(GOOGLE_CREDENTIALS_DIR, exist_ok=True)
-        with open(GOOGLE_CREDENTIALS_DIR / "token.json", "w") as f:
+        with open(GOOGLE_CREDENTIALS_DIR / "token.json", "w", encoding="utf-8") as f:
             json.dump(token_data, f, indent=2)
         if email:
-            with open(GOOGLE_CREDENTIALS_DIR / f"{email}.json", "w") as f:
+            with open(GOOGLE_CREDENTIALS_DIR / f"{email}.json", "w", encoding="utf-8") as f:
                 json.dump(token_data, f, indent=2)
     except Exception as e:
         print(f"Warning: Failed to sync token to workspace-mcp dir: {e}")
@@ -108,7 +108,7 @@ def get_google_credentials():
             creds.refresh(Request())
             # Preserve fields like `email` that aren't part of creds.to_json()
             try:
-                with open(TOKEN_FILE, "r") as f:
+                with open(TOKEN_FILE, "r", encoding="utf-8") as f:
                     prior = json.load(f)
             except Exception:
                 prior = {}
@@ -117,7 +117,7 @@ def get_google_credentials():
             merged = {**prior, **refreshed}
             if email:
                 merged["email"] = email
-            with open(TOKEN_FILE, "w") as token:
+            with open(TOKEN_FILE, "w", encoding="utf-8") as token:
                 json.dump(merged, token, indent=2)
             _sync_token_to_mcp(merged, email)
             return creds
@@ -190,7 +190,7 @@ def finish_auth(code, redirect_uri):
     except Exception as e:
         print(f"Warning: Could not fetch user email after OAuth: {e}")
 
-    with open(TOKEN_FILE, "w") as token:
+    with open(TOKEN_FILE, "w", encoding="utf-8") as token:
         json.dump(token_data, token, indent=2)
 
     print(f"DEBUG: token.json saved to {TOKEN_FILE}")
@@ -205,12 +205,12 @@ def finish_auth(code, redirect_uri):
         # 2. Save the token with the email formatted name
         if email:
             mcp_token_path = os.path.join(mcp_cred_dir, f"{email}.json")
-            with open(mcp_token_path, "w") as token:
+            with open(mcp_token_path, "w", encoding="utf-8") as token:
                 json.dump(token_data, token, indent=2)
             print(f"DEBUG: Synchronized token to workspace-mcp via {mcp_token_path}")
         # 3. Always save generic token.json just in case
         mcp_generic_token = os.path.join(mcp_cred_dir, "token.json")
-        with open(mcp_generic_token, "w") as token:
+        with open(mcp_generic_token, "w", encoding="utf-8") as token:
             json.dump(token_data, token, indent=2)
             
     except Exception as e:

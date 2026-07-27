@@ -307,7 +307,7 @@ async def test_python_tool(req: PythonTestRequest):
     script_path = os.path.join(tmp_dir, "script.py")
 
     try:
-        with open(script_path, "w") as f:
+        with open(script_path, "w", encoding="utf-8") as f:
             f.write(injected_code)
 
         cmd = [

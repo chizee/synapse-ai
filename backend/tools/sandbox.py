@@ -635,7 +635,7 @@ async def _handle_execute(args: dict) -> list[TextContent]:
     script_path = os.path.join(tmp_dir, "script.py")
 
     try:
-        with open(script_path, "w") as f:
+        with open(script_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         docker_cmd = _build_docker_cmd(

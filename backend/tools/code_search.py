@@ -20,7 +20,7 @@ def _load_repo_paths() -> dict[str, str]:
     try:
         from core.config import DATA_DIR
         repos_file = os.path.join(DATA_DIR, "repos.json")
-        with open(repos_file) as f:
+        with open(repos_file, encoding="utf-8") as f:
             repos = json.load(f)
         return {r["id"]: r["path"].rstrip("/") for r in repos if r.get("id") and r.get("path")}
     except Exception:
@@ -113,7 +113,7 @@ def _load_indexed_repo_ids() -> list[str]:
     try:
         from core.config import DATA_DIR
         repos_file = os.path.join(DATA_DIR, "repos.json")
-        with open(repos_file) as f:
+        with open(repos_file, encoding="utf-8") as f:
             repos = json.load(f)
         return [r["id"] for r in repos if r.get("status") == "indexed" and r.get("id")]
     except Exception:

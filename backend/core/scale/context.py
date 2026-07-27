@@ -86,7 +86,7 @@ async def resolve_mcp_servers() -> list[dict]:
     try:
         from core.mcp_client import MCP_SERVERS_FILE
         import json
-        with open(MCP_SERVERS_FILE) as f:
+        with open(MCP_SERVERS_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []

@@ -69,14 +69,14 @@ class FileTokenStorage(TokenStorage):
         if not os.path.exists(path):
             return None
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return None
 
     def _write(self, path: str, data: dict):
         os.makedirs(MCP_TOKENS_DIR, exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     async def get_tokens(self) -> Optional[OAuthToken]:
@@ -181,7 +181,7 @@ class MCPClientManager:
         if not os.path.exists(MCP_SERVERS_FILE):
             return []
         try:
-            with open(MCP_SERVERS_FILE) as f:
+            with open(MCP_SERVERS_FILE, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             print(f"Error loading MCP servers config: {e}")
@@ -189,7 +189,7 @@ class MCPClientManager:
 
     def save_servers(self):
         os.makedirs(os.path.dirname(MCP_SERVERS_FILE), exist_ok=True)
-        with open(MCP_SERVERS_FILE, "w") as f:
+        with open(MCP_SERVERS_FILE, "w", encoding="utf-8") as f:
             json.dump(self.servers_config, f, indent=4)
 
     def _set_status(self, name: str, status: str):

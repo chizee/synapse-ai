@@ -97,7 +97,7 @@ def _get_repo_paths() -> list[str]:
     if not REPOS_FILE.exists():
         return []
     try:
-        repos = json.loads(REPOS_FILE.read_text())
+        repos = json.loads(REPOS_FILE.read_text(encoding="utf-8"))
         return [r["path"] for r in repos if r.get("path") and os.path.isdir(r["path"])]
     except Exception as e:
         print(f"Warning: Could not load repo paths: {e}")
@@ -121,7 +121,7 @@ def _get_google_oauth_env() -> dict[str, str]:
     except Exception as e:
         print(f"Warning: Token refresh at startup failed: {e}")
     try:
-        creds = json.loads(creds_file.read_text())
+        creds = json.loads(creds_file.read_text(encoding="utf-8"))
         installed = creds.get("installed", creds.get("web", {}))
         client_id = installed.get("client_id", "")
         client_secret = installed.get("client_secret", "")
@@ -139,7 +139,7 @@ def _get_google_oauth_env() -> dict[str, str]:
         if token_file.exists():
             try:
                 import base64
-                token_data = json.loads(token_file.read_text())
+                token_data = json.loads(token_file.read_text(encoding="utf-8"))
                 email = token_data.get("email")
                 if not email and token_data.get("token"):
                     id_token = token_data["token"]
