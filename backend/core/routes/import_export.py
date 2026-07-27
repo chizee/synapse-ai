@@ -48,7 +48,7 @@ def _load_mcp_servers() -> List[dict]:
     if not os.path.exists(MCP_SERVERS_FILE):
         return []
     try:
-        with open(MCP_SERVERS_FILE) as f:
+        with open(MCP_SERVERS_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []
@@ -253,7 +253,7 @@ async def import_bundle(req: ImportRequest):
 
     if mcp_changed:
         os.makedirs(os.path.dirname(MCP_SERVERS_FILE), exist_ok=True)
-        with open(MCP_SERVERS_FILE, "w") as f:
+        with open(MCP_SERVERS_FILE, "w", encoding="utf-8") as f:
             json.dump(existing_mcp, f, indent=4)
 
     # Always sync manager with authoritative disk state and attempt connections

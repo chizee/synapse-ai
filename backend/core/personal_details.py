@@ -29,7 +29,7 @@ def load_personal_details() -> dict:
         return defaults
 
     try:
-        with open(PERSONAL_DETAILS_FILE, "r") as f:
+        with open(PERSONAL_DETAILS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         # Merge root
@@ -54,7 +54,7 @@ def save_personal_details(details: dict) -> dict:
     addr = d.get("address") if isinstance(d.get("address"), dict) else {}
     normalized["address"] = {**defaults["address"], **addr}
 
-    with open(PERSONAL_DETAILS_FILE, "w") as f:
+    with open(PERSONAL_DETAILS_FILE, "w", encoding="utf-8") as f:
         json.dump(normalized, f, indent=4)
 
     return normalized

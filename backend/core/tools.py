@@ -269,7 +269,7 @@ def build_system_prompt(agent_system_template, tools_json, session_id, session_s
         from core.config import TOKEN_FILE
         import os
         if os.path.exists(TOKEN_FILE):
-            with open(TOKEN_FILE, "r") as f:
+            with open(TOKEN_FILE, "r", encoding="utf-8") as f:
                 token_data = json.load(f)
                 google_email = token_data.get("email")
                 if not google_email and token_data.get("id_token"):

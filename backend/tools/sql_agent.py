@@ -33,7 +33,7 @@ def _load_db_configs() -> list[dict]:
     if not os.path.exists(path):
         return []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []

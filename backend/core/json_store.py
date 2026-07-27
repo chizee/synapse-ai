@@ -32,7 +32,7 @@ class JsonStore:
             if not os.path.exists(self.path):
                 return self.default_factory()
             try:
-                with open(self.path, "r") as f:
+                with open(self.path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if self._cache_ttl > 0:
                     self._cache = data
@@ -43,7 +43,7 @@ class JsonStore:
 
     def save(self, data):
         with self._lock:
-            with open(self.path, "w") as f:
+            with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
             if self._cache_ttl > 0:
                 self._cache = data

@@ -56,7 +56,7 @@ def _get_allowed_dirs() -> list[str]:
     repos_file = Path(DATA_DIR) / "repos.json"
     if repos_file.exists():
         try:
-            repos = json.loads(repos_file.read_text())
+            repos = json.loads(repos_file.read_text(encoding="utf-8"))
             dirs += [
                 r["path"]
                 for r in repos

@@ -122,7 +122,7 @@ async def generate_synthetic_data(request: SyntheticDataRequest):
                     record = json.loads(json_str)
                     
                     # Append to file immediatey (streaming save)
-                    with open(filepath, "a") as f:
+                    with open(filepath, "a", encoding="utf-8") as f:
                         f.write(json.dumps(record) + "\n")
                         
                     current_job["completed"] += 1

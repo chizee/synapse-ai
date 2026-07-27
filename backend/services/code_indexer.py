@@ -425,13 +425,13 @@ def _update_repo_status(repo_id: str, **fields):
     if not os.path.exists(repos_file):
         return
     with _repos_lock:
-        with open(repos_file, "r") as f:
+        with open(repos_file, "r", encoding="utf-8") as f:
             repos = json.load(f)
         for r in repos:
             if r["id"] == repo_id:
                 r.update(fields)
                 break
-        with open(repos_file, "w") as f:
+        with open(repos_file, "w", encoding="utf-8") as f:
             json.dump(repos, f, indent=4)
 
 

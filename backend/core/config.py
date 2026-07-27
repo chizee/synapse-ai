@@ -129,7 +129,7 @@ def load_settings():
         file_settings = {}
     else:
         try:
-            with open(SETTINGS_FILE, 'r') as f:
+            with open(SETTINGS_FILE, 'r', encoding="utf-8") as f:
                 file_settings = json.load(f)
         except Exception as e:
             print(f"DEBUG: Error loading settings: {e}")
@@ -168,7 +168,7 @@ def get_or_create_jwt_secret() -> str:
 
     if env_file.exists():
         try:
-            for line in env_file.read_text().splitlines():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if line.startswith(f"{var}=") and len(line) > len(f"{var}="):
                     val = line.split("=", 1)[1].strip()

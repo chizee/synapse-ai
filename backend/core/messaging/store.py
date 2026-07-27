@@ -17,7 +17,7 @@ def _load_raw() -> list[dict]:
     if not os.path.exists(CHANNELS_FILE):
         return []
     try:
-        with open(CHANNELS_FILE, "r") as f:
+        with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:
@@ -26,7 +26,7 @@ def _load_raw() -> list[dict]:
 
 def _save_raw(data: list[dict]) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(CHANNELS_FILE, "w") as f:
+    with open(CHANNELS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 

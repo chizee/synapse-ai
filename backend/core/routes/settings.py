@@ -270,7 +270,7 @@ async def upload_google_creds(request: Request):
         else:
             parsed = data
 
-        with open(CREDENTIALS_FILE, 'w') as f:
+        with open(CREDENTIALS_FILE, 'w', encoding="utf-8") as f:
             json.dump(parsed, f, indent=4)
 
         return {"status": "success", "message": "Credentials saved successfully."}
@@ -290,7 +290,7 @@ async def upload_google_token(request: Request):
         else:
             parsed = data
 
-        with open(TOKEN_FILE, 'w') as f:
+        with open(TOKEN_FILE, 'w', encoding="utf-8") as f:
             json.dump(parsed, f, indent=4)
 
         return {"status": "success", "message": "Token saved successfully."}
@@ -308,7 +308,7 @@ async def get_config():
         return {"has_credentials": False, "is_connected": False}
 
     try:
-        with open(CREDENTIALS_FILE, 'r') as f:
+        with open(CREDENTIALS_FILE, 'r', encoding="utf-8") as f:
             creds = json.load(f)
             app_info = creds.get("web") or creds.get("installed", {})
 
@@ -320,7 +320,7 @@ async def get_config():
         user_email = None
         if has_token:
             try:
-                with open(TOKEN_FILE, 'r') as tf:
+                with open(TOKEN_FILE, 'r', encoding="utf-8") as tf:
                     token_data = json.load(tf)
                     user_email = token_data.get("id_token_hint") or token_data.get("email")
                     # google-auth stores it in the token as a raw JWT — try to decode the id_token
@@ -382,7 +382,7 @@ async def get_examples():
     if not os.path.exists(index_path):
         return []
     try:
-        with open(index_path, "r") as f:
+        with open(index_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load examples index: {e}")
@@ -400,7 +400,7 @@ async def get_example_bundle(example_id: str):
     if not os.path.exists(bundle_path):
         raise HTTPException(status_code=404, detail=f"Example pack '{example_id}' not found")
     try:
-        with open(bundle_path, "r") as f:
+        with open(bundle_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load example bundle: {e}")

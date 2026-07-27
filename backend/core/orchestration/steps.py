@@ -493,7 +493,7 @@ class ToolStepExecutor:
         tmp_dir = tempfile.mkdtemp(prefix="pytool_")
         script_path = f"{tmp_dir}/script.py"
         try:
-            with open(script_path, "w") as f:
+            with open(script_path, "w", encoding="utf-8") as f:
                 f.write(injected_code)
 
             docker_cmd = [
@@ -1161,7 +1161,7 @@ class TransformStepExecutor:
         tmp_dir = tempfile.mkdtemp(prefix="transform_host_")
         script_path = str(Path(tmp_dir) / "transform.py")
         try:
-            with open(script_path, "w") as f:
+            with open(script_path, "w", encoding="utf-8") as f:
                 f.write(script_content)
 
             proc = await asyncio.create_subprocess_exec(
@@ -1210,7 +1210,7 @@ class TransformStepExecutor:
         tmp_dir = tempfile.mkdtemp(prefix="transform_")
         script_path = f"{tmp_dir}/transform.py"
         try:
-            with open(script_path, "w") as f:
+            with open(script_path, "w", encoding="utf-8") as f:
                 f.write(script_content)
 
             docker_cmd = [

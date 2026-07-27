@@ -1208,7 +1208,7 @@ async def run_agent_step(
                                 tmp_dir = _tempfile.mkdtemp(prefix="pytool_")
                                 script_path = f"{tmp_dir}/script.py"
                                 try:
-                                    with open(script_path, "w") as _f:
+                                    with open(script_path, "w", encoding="utf-8") as _f:
                                         _f.write(injected_code)
 
                                     docker_cmd = [
