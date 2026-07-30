@@ -94,3 +94,67 @@ class TestHeartbeat:
         seen = [ev async for ev in iter_with_heartbeat(_slow(), interval=0.01)]
         assert SSE_HEARTBEAT in seen
         assert {"type": "final"} in seen
+
+    async def test_iter_with_heartbeat_survives_cancel_scope_across_yield(self):
+        """Regression for #356: a source holding an anyio cancel scope across a
+        yield must not be advanced by a fresh task per pull, or exiting the
+        scope raises "cancel scope in a different task"."""
+        import anyio
+        from core.react_engine import iter_with_heartbeat
+
+        async def _src():
+            with anyio.fail_after(30):
+                yield {"type": "step_start"}
+                yield {"type": "final"}
+            yield {"type": "orchestration_complete"}
+
+        seen = [ev async for ev in iter_with_heartbeat(_src(), interval=100)]
+        assert [e["type"] for e in seen] == [
+            "step_start", "final", "orchestration_complete",
+        ]
+
+    async def test_iter_with_heartbeat_closes_source_on_early_exit(self):
+        """Closing the wrapper from another task — what Python's GC finalizer
+        does to an abandoned async generator — must still close a
+        scope-holding source without a cross-task cancel-scope error."""
+        import asyncio
+        import anyio
+        from core.react_engine import iter_with_heartbeat
+
+        closed, teardown_errors = [], []
+
+        async def _src():
+            try:
+                with anyio.fail_after(30):
+                    yield {"type": "step_start"}
+                    yield {"type": "final"}
+            except BaseException as exc:
+                teardown_errors.append(exc)
+                raise
+            finally:
+                closed.append(True)
+
+        stream = iter_with_heartbeat(_src(), interval=100)
+        assert await stream.__anext__() == {"type": "step_start"}
+
+        await asyncio.ensure_future(stream.aclose())  # client disconnected
+
+        assert closed == [True]
+        # Closing must unwind cleanly via GeneratorExit. Closing the source from
+        # the consumer's task instead made exiting its cancel scope raise
+        # RuntimeError here, which the old wrapper then swallowed.
+        assert all(isinstance(e, GeneratorExit) for e in teardown_errors), teardown_errors
+
+    async def test_iter_with_heartbeat_propagates_source_exception(self):
+        import pytest
+        from core.react_engine import iter_with_heartbeat
+
+        async def _src():
+            yield {"type": "status"}
+            raise ValueError("boom")
+
+        seen = []
+        with pytest.raises(ValueError, match="boom"):
+            async for ev in iter_with_heartbeat(_src(), interval=100):
+                seen.append(ev)
+        assert seen == [{"type": "status"}]

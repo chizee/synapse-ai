@@ -113,8 +113,9 @@ async def v1_chat(body: V1ChatRequest, key_record: dict = Depends(require_api_ke
             etype = event.get("type", "")
             if etype == "final":
                 final_event = event
-            elif etype == "error":
-                error_msg = event.get("message", "Unknown error")
+            elif etype in ("error", "orchestration_error"):
+                # orchestration_error is what an orchestrator agent fails with.
+                error_msg = event.get("message") or event.get("error") or "Unknown error"
     except Exception as exc:
         log.exception("[v1/chat] Unhandled error for session=%s", chat_request.session_id)
         raise HTTPException(status_code=500, detail="An internal error occurred. Check server logs for details.")
@@ -204,8 +205,10 @@ async def v1_chat_stream(body: V1ChatRequest, key_record: dict = Depends(require
                     })
                     yield _format_sse_event({"type": "done"})
 
-                elif etype == "error":
-                    log.error("[v1/chat/stream] Agent error session=%s: %s", chat_request.session_id, event.get("message"))
+                elif etype in ("error", "orchestration_error"):
+                    # orchestration_error is what an orchestrator agent fails with.
+                    log.error("[v1/chat/stream] Agent error session=%s: %s", chat_request.session_id,
+                              event.get("message") or event.get("error"))
                     yield _format_sse_event({"type": "error", "message": "The agent encountered an error processing your request."})
 
                 await asyncio.sleep(0)
@@ -314,8 +317,11 @@ async def v1_orchestration_run_stream(
 
     async def event_stream():
         from core.react_engine import iter_with_heartbeat
+        from core.orchestration.runner import stream_engine_events
         try:
-            async for event in iter_with_heartbeat(engine.run(body.message, run_id)):
+            async for event in iter_with_heartbeat(
+                stream_engine_events(engine.run(body.message, run_id), run_id)
+            ):
                 # Heartbeat comments are yielded as raw SSE strings — pass through.
                 if isinstance(event, str):
                     yield event
@@ -436,8 +442,13 @@ async def v1_orchestration_resume_stream(
 
     async def event_stream():
         from core.react_engine import iter_with_heartbeat
+        from core.orchestration.runner import stream_engine_events
         try:
-            async for event in iter_with_heartbeat(OrchestrationEngine.resume(run_id, human_response, _server)):
+            async for event in iter_with_heartbeat(
+                stream_engine_events(
+                    OrchestrationEngine.resume(run_id, human_response, _server), run_id
+                )
+            ):
                 # Heartbeat comments are yielded as raw SSE strings — pass through.
                 if isinstance(event, str):
                     yield event

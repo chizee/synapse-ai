@@ -1,7 +1,6 @@
 """
 Orchestration management endpoints: CRUD, run, human-input, cancel.
 """
-import asyncio
 import os
 import json
 import time
@@ -13,13 +12,13 @@ from core.models_orchestration import Orchestration
 from core.config import DATA_DIR
 from core.json_store import JsonStore
 from core.react_engine import drain_queue_with_heartbeat
+# Registry of active run tasks (for mid-step cancellation), owned by the runner
+# so non-route callers can register runs too.
+from core.orchestration.runner import SENTINEL, _active_tasks, spawn_engine_run
 
 router = APIRouter()
 
 _orch_store = JsonStore(os.path.join(DATA_DIR, "orchestrations.json"), cache_ttl=2.0)
-
-# In-memory registry of active run tasks (for mid-step cancellation)
-_active_tasks: dict[str, asyncio.Task] = {}
 
 
 def load_orchestrations() -> list[dict]:
@@ -153,36 +152,14 @@ async def run_orchestration(orch_id: str, request: Request):
     from core.orchestration.engine import OrchestrationEngine
     engine = OrchestrationEngine(orch, server_module)
 
-    queue: asyncio.Queue = asyncio.Queue()
-    _SENTINEL = object()
-
-    async def _run_engine():
-        try:
-            async for event in engine.run(user_input, run_id):
-                etype = event.get("type", "")
-                if etype not in ("chunk", "thinking", "token_usage"):
-                    print(f"DEBUG SSE QUEUE: → {etype} step={event.get('orch_step_id', '')}", flush=True)
-                await queue.put(event)
-                # Yield so event_stream() can dequeue and flush this event
-                # to the HTTP response before the next event is enqueued.
-                await asyncio.sleep(0)
-        except asyncio.CancelledError:
-            await queue.put({"type": "orchestration_error", "error": "Cancelled"})
-        except Exception as e:
-            await queue.put({"type": "orchestration_error", "error": str(e)})
-        finally:
-            _active_tasks.pop(run_id, None)
-            print(f"DEBUG SSE QUEUE: sentinel sent, stream closing", flush=True)
-            await queue.put(_SENTINEL)
-
-    # Engine runs independently of SSE consumer; store task for cancellation
-    task = asyncio.create_task(_run_engine())
-    _active_tasks[run_id] = task
+    # Engine runs in its own task, independently of the SSE consumer, and is
+    # registered for cancellation.
+    _task, queue = spawn_engine_run(engine.run(user_input, run_id), run_id)
 
     async def event_stream():
         # Heartbeats keep the stream warm during long LLM/compaction steps so a
         # busy-but-alive run is not mistaken for a dropped connection.
-        async for chunk in drain_queue_with_heartbeat(queue, _SENTINEL):
+        async for chunk in drain_queue_with_heartbeat(queue, SENTINEL):
             yield chunk
         yield "data: {\"type\": \"done\"}\n\n"
 
@@ -222,29 +199,14 @@ async def resume_failed_run(run_id: str, request: Request):
 
     from core.orchestration.engine import OrchestrationEngine
 
-    queue: asyncio.Queue = asyncio.Queue()
-    _SENTINEL = object()
-
-    async def _run_engine():
-        try:
-            async for event in OrchestrationEngine.resume_failed(run_id, server_module):
-                await queue.put(event)
-                await asyncio.sleep(0)
-        except FileNotFoundError:
-            await queue.put({"type": "orchestration_error", "error": "Run not found"})
-        except Exception as e:
-            await queue.put({"type": "orchestration_error", "error": str(e)})
-        finally:
-            _active_tasks.pop(run_id, None)
-            await queue.put(_SENTINEL)
-
-    task = asyncio.create_task(_run_engine())
-    _active_tasks[run_id] = task
+    _task, queue = spawn_engine_run(
+        OrchestrationEngine.resume_failed(run_id, server_module), run_id
+    )
 
     async def event_stream():
         # Heartbeats keep the stream warm during long LLM/compaction steps so a
         # busy-but-alive run is not mistaken for a dropped connection.
-        async for chunk in drain_queue_with_heartbeat(queue, _SENTINEL):
+        async for chunk in drain_queue_with_heartbeat(queue, SENTINEL):
             yield chunk
         yield "data: {\"type\": \"done\"}\n\n"
 
@@ -341,27 +303,14 @@ async def submit_human_input(run_id: str, request: Request):
     # --- V1 in-process path (unchanged) ---
     from core.orchestration.engine import OrchestrationEngine
 
-    queue: asyncio.Queue = asyncio.Queue()
-    _SENTINEL = object()
-
-    async def _run_engine():
-        try:
-            async for event in OrchestrationEngine.resume(run_id, human_response, server_module):
-                await queue.put(event)
-                await asyncio.sleep(0)
-        except FileNotFoundError:
-            await queue.put({"type": "orchestration_error", "error": "Run not found"})
-        except Exception as e:
-            await queue.put({"type": "orchestration_error", "error": str(e)})
-        finally:
-            await queue.put(_SENTINEL)
-
-    asyncio.create_task(_run_engine())
+    _task, queue = spawn_engine_run(
+        OrchestrationEngine.resume(run_id, human_response, server_module), run_id
+    )
 
     async def event_stream():
         # Heartbeats keep the stream warm during long LLM/compaction steps so a
         # busy-but-alive run is not mistaken for a dropped connection.
-        async for chunk in drain_queue_with_heartbeat(queue, _SENTINEL):
+        async for chunk in drain_queue_with_heartbeat(queue, SENTINEL):
             yield chunk
         yield "data: {\"type\": \"done\"}\n\n"
 

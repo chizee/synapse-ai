@@ -4,6 +4,7 @@ Yields structured event dicts that callers can handle differently
 (collect for sync response, or stream as SSE).
 """
 import asyncio
+import contextlib
 import json
 import sys
 import time
@@ -47,8 +48,21 @@ MAX_TURNS = 30
 # Heartbeats are yielded as the raw SSE string, so endpoints can pass them
 # straight through; real events remain dicts (`isinstance(item, str)`
 # distinguishes them).
+#
+# The source is advanced by a single dedicated pump task rather than a fresh
+# task per pull. anyio binds a cancel scope to the task that entered it, so a
+# source holding a scope across a yield (the orchestration engine's per-step
+# timeout) must be advanced — and closed — from one task. See issue #356.
 # ──────────────────────────────────────────────────────────────────────────────
 SSE_HEARTBEAT = ": ping\n\n"
+
+
+class _StreamEnd:
+    """Sentinel handing the source's terminal state back to the consumer."""
+    __slots__ = ("error",)
+
+    def __init__(self, error):
+        self.error = error
 
 
 async def iter_with_heartbeat(agen, interval: float = 10.0):
@@ -57,40 +71,51 @@ async def iter_with_heartbeat(agen, interval: float = 10.0):
 
     The underlying generator is never cancelled on a heartbeat timeout — only
     when the consumer stops early (e.g. a client disconnect closes this
-    generator), in which case the pending pull is cancelled and the source is
-    closed in the finally block.
+    generator), in which case the pump is cancelled and closes the source.
     """
-    ait = agen.__aiter__()
-    pending = None
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1)  # maxsize=1 keeps backpressure
+
+    async def _pump():
+        # Advances `agen` in THIS single task, so a cancel scope the source
+        # holds across a yield is never exited from another task — and
+        # aclose() below runs in that scope's host task too.
+        try:
+            async for item in agen:
+                await queue.put(item)
+            await queue.put(_StreamEnd(None))
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                await queue.put(_StreamEnd(exc))
+        finally:
+            aclose = getattr(agen, "aclose", None)
+            if aclose is not None:
+                with contextlib.suppress(BaseException):
+                    await aclose()
+
+    pump = asyncio.ensure_future(_pump())
     try:
         while True:
-            if pending is None:
-                pending = asyncio.ensure_future(ait.__anext__())
-            done, _ = await asyncio.wait({pending}, timeout=interval)
-            if not done:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=interval)
+            except asyncio.TimeoutError:
+                if pump.done():
+                    # Source ended without a sentinel — it was cancelled.
+                    return
                 # No event within the interval — keep the stream warm.
                 yield SSE_HEARTBEAT
                 continue
-            task = pending
-            pending = None
-            try:
-                item = task.result()
-            except StopAsyncIteration:
+            if isinstance(item, _StreamEnd):
+                if item.error is not None:
+                    raise item.error
                 return
             yield item
     finally:
-        if pending is not None:
-            pending.cancel()
-            try:
-                await pending
-            except BaseException:
-                pass
-        aclose = getattr(agen, "aclose", None)
-        if aclose is not None:
-            try:
-                await aclose()
-            except BaseException:
-                pass
+        if not pump.done():
+            pump.cancel()
+        with contextlib.suppress(BaseException):
+            await pump
 
 
 async def drain_queue_with_heartbeat(queue, sentinel, interval: float = 10.0):
@@ -1591,6 +1616,7 @@ async def run_react_loop(request, server_module):
                 from core.routes.orchestrations import load_orchestrations
                 from core.models_orchestration import Orchestration
                 from core.orchestration.engine import OrchestrationEngine
+                from core.orchestration.runner import stream_engine_events
 
                 orchs = load_orchestrations()
                 orch_data = next((o for o in orchs if o["id"] == orch_id), None)
@@ -1598,7 +1624,14 @@ async def run_react_loop(request, server_module):
                     orch = Orchestration.model_validate(orch_data)
                     engine = OrchestrationEngine(orch, server_module)
                     run_id = f"run_{orch_id}_{int(time.time() * 1000)}"
-                    async for event in engine.run(user_message, run_id, session_id=session_id):
+                    # Route through the shared runner, exactly as the editor's
+                    # run endpoint does: the engine holds anyio cancel scopes
+                    # across yields, so it must be advanced from a single task
+                    # no matter how the SSE layer consumes us (issue #356).
+                    # It also registers the run for cancel/reconnect.
+                    async for event in stream_engine_events(
+                        engine.run(user_message, run_id, session_id=session_id), run_id
+                    ):
                         yield event
                     return
                 else:

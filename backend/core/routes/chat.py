@@ -39,6 +39,9 @@ async def chat(request: ChatRequest):
             final_event = event
         elif event["type"] == "error":
             return ChatResponse(response=event["message"], intent="chat", data=None, tool_name=None)
+        elif event["type"] == "orchestration_error":
+            # An orchestrator agent failed — same outcome, different event shape.
+            return ChatResponse(response=event["error"], intent="chat", data=None, tool_name=None)
 
     if not final_event:
         return ChatResponse(response="I completed the requested actions.", intent="chat", data=None, tool_name=None)
