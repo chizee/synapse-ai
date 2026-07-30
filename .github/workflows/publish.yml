@@ -4,6 +4,24 @@ on:
   push:
     tags:
       - 'v*'
+  # Escape hatch for a half-failed release: publish-docker builds three images, and
+  # when one fails the other two are already on Docker Hub, so re-tagging is not an
+  # option. Re-running the failed run does not help either — it replays the workflow
+  # file from the tagged commit. Dispatching runs the current file from master while
+  # `ref` selects the source to build.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to (re)publish, e.g. 1.8.4'
+        required: true
+      ref:
+        description: 'Git ref to build from (e.g. v1.8.4). Defaults to the selected branch.'
+        required: false
+      images:
+        description: 'Which images to publish'
+        default: all
+        type: choice
+        options: [all, combined, worker, api-server]
 
 jobs:
   # ── Deploy gate ────────────────────────────────────────────────────────────
@@ -14,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -28,7 +48,10 @@ jobs:
 
       - name: Verify version matches the release tag
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          # On workflow_dispatch GITHUB_REF_NAME is a branch, so take the version from
+          # the input instead — that is the version actually being published.
+          TAG="${{ inputs.version || github.ref_name }}"
+          TAG="${TAG#v}"
           PY=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
           NPM=$(python -c "import json,pathlib; print(json.loads(pathlib.Path('package.json').read_text())['version'])")
           echo "tag=$TAG pyproject=$PY package.json=$NPM"
@@ -49,8 +72,14 @@ jobs:
           path: junit.xml
           if-no-files-found: ignore
 
+  # PyPI/npm/frontend only run for a real tag push. workflow_dispatch exists to repair
+  # a failed *image* publish, and neither registry can be republished at the same
+  # version anyway — `npm publish` rejects it outright, and twine needs --skip-existing.
+  # publish-docker does not need this job: the combined Dockerfile builds the frontend
+  # in its own stage.
   build-frontend:
     needs: gate
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +103,7 @@ jobs:
   publish-python:
     runs-on: ubuntu-latest
     needs: [gate, build-frontend]
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
@@ -112,6 +142,7 @@ jobs:
   publish-npm:
     runs-on: ubuntu-latest
     needs: [gate, build-frontend]
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
@@ -139,11 +170,46 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+  # Selects which images publish-docker builds. A job-level `if` cannot see the
+  # `matrix` context, so the `images` dispatch input is applied by building the
+  # matrix here instead — a deselected image produces no job at all.
+  plan-images:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        run: |
+          ALL='[
+            {"file":"Dockerfile",        "image":"synapse-ai",           "scope":"combined"},
+            {"file":"Dockerfile.worker", "image":"synapse-ai-worker",    "scope":"worker"},
+            {"file":"Dockerfile.backend","image":"synapse-ai-api-server","scope":"api-server"}
+          ]'
+          SEL="${{ inputs.images || 'all' }}"
+          if [ "$SEL" = "all" ]; then
+            SELECTED=$(jq -c . <<<"$ALL")
+          else
+            SELECTED=$(jq -c --arg s "$SEL" '[.[] | select(.scope==$s)]' <<<"$ALL")
+          fi
+          echo "Publishing: $(jq -r '[.[].image] | join(", ")' <<<"$SELECTED")"
+          echo "matrix=$SELECTED" >> $GITHUB_OUTPUT
+
+  # One job per image. Splitting by IMAGE, not by platform — each job still builds
+  # both arches in a single buildx run and pushes one multi-arch manifest list, so
+  # no `imagetools create` merge step is needed. The split buys parallelism (~70min
+  # of sequential builds → the slowest single image) and, more importantly, failure
+  # isolation: a broken image can be re-run on its own instead of rebuilding all three.
   publish-docker:
     runs-on: ubuntu-latest
-    needs: gate
+    needs: [gate, plan-images]
+    strategy:
+      fail-fast: false  # two images already pushed must not be cancelled by the third
+      matrix:
+        include: ${{ fromJSON(needs.plan-images.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -157,45 +223,31 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract version from tag
+      - name: Resolve version
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: |
+          V="${{ inputs.version || github.ref_name }}"
+          echo "VERSION=${V#v}" >> $GITHUB_OUTPUT
 
-      - name: Build and push combined image
+      - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile
+          file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/synapse-ai:${{ steps.version.outputs.VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/synapse-ai:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push worker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.worker
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/synapse-ai-worker:${{ steps.version.outputs.VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/synapse-ai-worker:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push API server image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.backend
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/synapse-ai-api-server:${{ steps.version.outputs.VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/synapse-ai-api-server:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:${{ steps.version.outputs.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:latest
+          # Read the per-image cache docker-build.yml warms on master. Scoped because
+          # an unscoped `type=gha` puts all three images in one index, which is both
+          # useless (api-server is a different Python base than the other two, so it
+          # got 0 cache hits) and dangerous: each export rewrote an index the others
+          # referenced, and in v1.8.4 that raced cache eviction and killed the release
+          # with `failed to solve: not_found` — after the image had already been built.
+          #
+          # Deliberately no cache-to. Releases are 1-2 weeks apart and GHA evicts after
+          # 7 days, so the export never paid off: across the whole v1.8.4 job it bought
+          # 2 cache hits while burning multi-GB of the 10GB repo quota, evicting the CI
+          # caches that are used daily, and putting a failure mode in the push path.
+          cache-from: type=gha,scope=${{ matrix.scope }}

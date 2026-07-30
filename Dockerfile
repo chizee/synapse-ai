@@ -11,10 +11,16 @@ RUN npm run build
 # Stage 2: Combined runtime (Python backend + Node.js frontend)
 FROM python:3.13-slim
 
+# Node 20 + npm for the npx-based MCP servers, from Debian (base is Debian 13
+# trixie, whose nodejs is already v20). Do NOT go back to
+# `curl -fsSL …nodesource… | bash -`: the pipe discards curl's exit code, so an
+# intermittent 403 fell through to Debian's `nodejs` — which ships only
+# /usr/bin/node, no npm/npx. This image pre-installs no MCP servers and resolves
+# every one through `npx` at runtime, so v1.8.4 shipped with all of them broken.
+# npm is a separate package here; the assertion below keeps it from vanishing again.
 RUN apt-get update && apt-get install -y \
-    curl build-essential libpq-dev supervisor \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
+    curl build-essential libpq-dev supervisor nodejs npm \
+    && node --version && npx --version \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend

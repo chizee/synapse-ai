@@ -21,7 +21,11 @@ on:
       - 'frontend/**'
       - 'scripts/build_frontend.sh'
   push:
-    branches: [main]
+    # master is the release line; `main` is a stale downstream, so this trigger was
+    # never firing. That left the type=gha caches written only by pull_request runs —
+    # which are scoped to the PR ref and unreadable from a tag build, so publish.yml's
+    # cache-from had nothing to hit. Building here on master is what populates them.
+    branches: [master]
     paths:
       - 'Dockerfile*'
       - 'docker/**'
