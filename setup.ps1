@@ -121,7 +121,7 @@ function Test-NodeVersion {
 # ---------------------------------------------------------------------------
 function Install-Python {
     Write-Host ""
-    Write-Host "Installing Python 3.11-3.13..." -ForegroundColor Cyan
+    Write-Host "Installing Python 3.11-3.14..." -ForegroundColor Cyan
 
     # Check if winget is available
     if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -141,11 +141,13 @@ function Test-PythonVersion {
     param([string]$cmd)
     try {
         # We use double quotes for the -c argument as it's more reliable on Windows.
-        # Python will exit with 0 if 3.11 <= version < 3.14, and 1 otherwise.
-        # The upper bound keeps us off brand-new releases (e.g. 3.14) that lack
-        # prebuilt wheels for native deps like lxml, which would force a source
-        # build and fail without MSVC build tools.
-        $check = "import sys; sys.exit(0 if (3,11) <= sys.version_info < (3,14) else 1)"
+        # Python will exit with 0 if 3.11 <= version < 3.15, and 1 otherwise.
+        # The upper bound keeps us off brand-new releases that lack prebuilt
+        # wheels for native deps, which would force a source build and fail
+        # without MSVC build tools. 3.14 was verified to resolve wheel-only on
+        # Windows for the full dependency tree, so it is inside the range.
+        # Must stay in sync with requires-python in pyproject.toml.
+        $check = "import sys; sys.exit(0 if (3,11) <= sys.version_info[:2] < (3,15) else 1)"
         
         # Use Start-Process or direct execution with 2>$null
         # We check $LASTEXITCODE to determine compatibility
@@ -173,7 +175,7 @@ function Get-PythonPath {
     }
 
     # 2. Check candidates in PATH
-    $candidates = @("python3.11", "python", "python3", "python3.12", "python3.13")
+    $candidates = @("python3.14", "python3.13", "python3.12", "python3.11", "python", "python3")
     foreach ($cmd in $candidates) {
         if (Get-Command $cmd -ErrorAction SilentlyContinue) {
             # Skip Windows Store placeholders
@@ -307,13 +309,13 @@ function Invoke-PrerequisitesCheck {
     $global:PYTHON_CMD = Get-PythonPath
 
     if (-not $global:PYTHON_CMD) {
-        Write-Host "[WARN] A supported Python (3.11-3.13) could not be found." -ForegroundColor Yellow
+        Write-Host "[WARN] A supported Python (3.11-3.14) could not be found." -ForegroundColor Yellow
         Write-Host "Attempting to install Python 3.13..."
         Install-Python
 
         $global:PYTHON_CMD = Get-PythonPath
         if (-not $global:PYTHON_CMD) {
-        throw "Failed to install a supported Python automatically. Please manually install Python 3.11-3.13 from https://www.python.org/downloads/"
+        throw "Failed to install a supported Python automatically. Please manually install Python 3.11-3.14 from https://www.python.org/downloads/"
     }
 }
 

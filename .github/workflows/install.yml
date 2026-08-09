@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -52,6 +52,51 @@ jobs:
           /tmp/sdist/bin/pip install --upgrade pip
           /tmp/sdist/bin/pip install --no-deps dist/*.tar.gz
           /tmp/sdist/bin/synapse --help
+
+      - name: Assert the lockfiles are packaged
+        # The CLI installs backend/requirements.lock. If the wheel doesn't ship
+        # it, every packaged install silently falls back to unlocked resolution —
+        # which is the failure mode this whole change exists to prevent.
+        run: |
+          python -m zipfile -l dist/*.whl > /tmp/wheel-contents.txt
+          for f in backend/requirements.lock backend/requirements-messaging.lock; do
+            grep -q "$f" /tmp/wheel-contents.txt \
+              || { echo "::error::wheel is missing $f"; exit 1; }
+          done
+          echo "Lockfiles present in the wheel."
+
+  # ── real dependency resolution ──────────────────────────────────────────────
+  # The job above uses --no-deps, so it validates packaging but is structurally
+  # incapable of catching a dependency break. This one actually resolves and
+  # installs, then boots every MCP tool server — the check that would have caught
+  # mcp 2.0.0 before it reached users.
+  pip-install-with-deps:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    continue-on-error: ${{ matrix.python-version != '3.11' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install the locked dependency set
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.lock
+          pip install -r backend/requirements-test.txt
+
+      - name: Boot every MCP tool server
+        run: |
+          python -m pytest \
+            backend/tests/install/test_mcp_tool_servers.py \
+            backend/tests/install/test_mcp_sdk_contract.py \
+            backend/tests/install/test_requirements_pinned.py \
+            -v -ra
 
   # ── npm ─────────────────────────────────────────────────────────────────────
   npm-install:

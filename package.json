@@ -26,7 +26,9 @@
     "backend/main.py",
     "backend/requirements.txt",
     "backend/requirements-coding.txt",
-    "backend/requirements-messaging.txt"
+    "backend/requirements-messaging.txt",
+    "backend/requirements.lock",
+    "backend/requirements-messaging.lock"
   ],
   "engines": {
     "node": ">=18.0.0"

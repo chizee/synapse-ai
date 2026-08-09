@@ -8,7 +8,7 @@ version = "1.8.5"
 description = "Synapse - A Multi Agent Orchestrator"
 readme = "README.md"
 license = { text = "AGPL-3.0-only" }
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 keywords = ["ai", "agent", "mcp", "llm", "orchestrator", "local", "ollama"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -16,39 +16,48 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# `pip install synapse-orch-ai` resolves from this list, not from
+# backend/requirements.txt — so it needs the same upper bounds. A floor-only
+# spec here is how mcp 2.0.0 reached users and broke every native tool server.
+#
+# mcp<2 is load-bearing: 2.0 removed the lowlevel Server decorator API that all
+# of backend/tools/ depends on. See backend/requirements.txt for the full note.
 dependencies = [
-    "cffi>=2.0.0",
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.29",
-    "httpx>=0.27",
-    "google-api-python-client>=2.0",
-    "google-auth-oauthlib>=1.0",
-    "mcp>=1.0",
-    "chromadb>=0.5",
-    "ollama>=0.2",
-    "beautifulsoup4>=4.12",
-    "playwright>=1.44",
-    "duckduckgo-search>=6.0",
-    "boto3>=1.34",
-    "sqlalchemy>=2.0",
-    "psycopg2-binary>=2.9",
-    "pymysql>=1.1",
-    "pypdf>=4.0",
-    "pdfplumber>=0.10",
-    "pandas>=2.0",
-    "openpyxl>=3.1",
-    "requests>=2.31",
-    "anthropic>=0.28",
-    "crawl4ai>=0.4",
-    "psycopg[binary]>=3.0",
-    "psycopg-pool>=3.0",
+    "cffi>=2.0.0,<3",
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.29,<1",
+    "httpx>=0.27,<1",
+    "google-api-python-client>=2.0,<3",
+    "google-auth-oauthlib>=1.0,<2",
+    "mcp>=1.29,<2",
+    "chromadb>=0.5,<2",
+    "ollama>=0.2,<1",
+    "beautifulsoup4>=4.12,<5",
+    "playwright>=1.44,<2",
+    "duckduckgo-search>=6.0,<9",
+    "boto3>=1.34,<2",
+    "sqlalchemy>=2.0,<3",
+    "psycopg2-binary>=2.9,<3",
+    "pymysql>=1.1,<2",
+    "pypdf>=4.0,<7",
+    "pdfplumber>=0.10,<1",
+    "pandas>=2.0,<4",
+    "openpyxl>=3.1,<4",
+    "requests>=2.31,<3",
+    "anthropic>=0.28,<1",
+    "crawl4ai>=0.4,<1",
+    "psycopg[binary]>=3.0,<4",
+    "psycopg-pool>=3.0,<4",
     "cocoindex>=0.3.30,<1.0",
-    "python-telegram-bot>=20.0",
-    "discord.py>=2.3",
-    "slack-bolt>=1.18",
-    "pyyaml>=6.0",
+    "python-telegram-bot>=20.0,<23",
+    "discord.py>=2.3,<3",
+    "slack-bolt>=1.18,<2",
+    "pyyaml>=6.0,<7",
 ]
 
 [project.scripts]
@@ -76,6 +85,10 @@ include = [
     "backend/requirements.txt",
     "backend/requirements-coding.txt",
     "backend/requirements-messaging.txt",
+    # The locks are what the CLI actually installs — without them shipped, a
+    # packaged install silently falls back to unlocked resolution.
+    "backend/requirements.lock",
+    "backend/requirements-messaging.lock",
 ]
 
 [project.optional-dependencies]

@@ -145,3 +145,59 @@ jobs:
           # `synapse setup`/first-run creates the venv and pip-installs deps.
           timeout 900 synapse status || true
           command -v synapse
+
+  # ── dependency drift (early warning) ────────────────────────────────────────
+  # The gate installs backend/requirements.lock, which is exactly the point: users
+  # get a tested environment. The cost is that CI stops noticing what upstream is
+  # doing. This job deliberately resolves requirements*.txt UNPINNED and runs the
+  # MCP boot tests against it.
+  #
+  # This is the job that would have caught mcp 2.0.0 the day it was published,
+  # instead of a user discovering it on a fresh install: the SDK removed the
+  # lowlevel Server decorator API and every native tool server stopped loading.
+  #
+  # A failure here is not a broken PR — it means "upstream shipped something that
+  # breaks us; the cap is holding, go investigate before raising it."
+  dependency-drift:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Resolve dependencies unpinned (ignore the lock)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade -r backend/requirements.txt -r backend/requirements-coding.txt
+          pip install -r backend/requirements-test.txt
+
+      - name: Report what actually resolved
+        run: pip freeze | sort
+
+      - name: Boot every MCP tool server + check the SDK contract
+        run: |
+          python -m pytest \
+            backend/tests/install/test_mcp_tool_servers.py \
+            backend/tests/install/test_mcp_sdk_contract.py \
+            -v -ra
+
+      - name: Explain a failure
+        if: failure()
+        run: |
+          {
+            echo "## Dependency drift detected — Python ${{ matrix.python-version }}"
+            echo ""
+            echo "Resolving \`backend/requirements.txt\` without the lockfile produced an"
+            echo "environment that fails the MCP boot tests."
+            echo ""
+            echo "Users are **not** broken: installers resolve \`backend/requirements.lock\`."
+            echo "This is the early warning that an upstream release is incompatible."
+            echo ""
+            echo "Check the \`pip freeze\` output above for what moved, then either add an"
+            echo "upper bound in requirements.txt or do the migration."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -28,8 +28,10 @@ RUN pip install playwright && playwright install chromium --with-deps
 
 WORKDIR /app
 
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from the lockfile so images resolve the exact tree CI tested.
+# requirements.txt is copied too, as the fallback and for provenance.
+COPY backend/requirements.txt backend/requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 
 COPY backend/core ./core
 COPY backend/services ./services

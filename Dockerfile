@@ -24,8 +24,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from the lockfile so images resolve the exact tree CI tested.
+# requirements.txt is copied too, as the fallback and for provenance.
+COPY backend/requirements.txt backend/requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 RUN pip install playwright && playwright install chromium --with-deps
 
 COPY backend/core ./core

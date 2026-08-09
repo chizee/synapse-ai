@@ -163,22 +163,36 @@ check_uvx() {
 # Check and validate requirements
 # ---------------------------------------------------------------------------
 
-# Returns true (0) if the given python command is >= 3.11
-_python_meets_minimum() {
+# Returns true (0) if the given python command is in the supported range:
+# 3.11 <= version < 3.15. Must stay in sync with requires-python in pyproject.toml.
+# The upper bound matters — an interpreter newer than anything we've tested
+# resolves a dependency tree nobody has run.
+_python_is_supported() {
     local cmd="$1"
     command -v "$cmd" &> /dev/null || return 1
-    local major minor
-    major=$("$cmd" -c 'import sys; print(sys.version_info.major)' 2>/dev/null)
-    minor=$("$cmd" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null)
-    [[ -n "$major" && -n "$minor" ]] || return 1
-    [[ "$major" -gt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -ge 11 ]]; }
+    "$cmd" -c 'import sys; sys.exit(0 if (3, 11) <= sys.version_info[:2] < (3, 15) else 1)' 2>/dev/null
 }
 
-# Scans well-known python command names and sets PYTHON_CMD to the first one >= 3.11
+# Scans well-known python command names and sets PYTHON_CMD to the first
+# supported one.
+#
+# Preference order is newest-first, except on macOS. onnxruntime (pulled in by
+# chromadb) ships no x86_64 macOS wheel for cp314, and its arm64 cp314 wheel
+# requires macOS 14+ — so 3.14 installs cleanly on Apple Silicon/macOS 14+ but
+# cannot resolve at all on Intel Macs. 3.13 works on every macOS we support, so
+# we prefer it there. This only changes which interpreter we *pick*: a macOS
+# user who has nothing but 3.14 is still allowed to proceed.
 _find_python_cmd() {
+    local candidates
+    if [[ "$OS" == "macos" ]]; then
+        candidates="python3.13 python3.12 python3.11 python3.14 python3 python"
+    else
+        candidates="python3.14 python3.13 python3.12 python3.11 python3 python"
+    fi
+
     PYTHON_CMD=""
-    for cmd in python3.13 python3.12 python3.11 python3 python; do
-        if _python_meets_minimum "$cmd"; then
+    for cmd in $candidates; do
+        if _python_is_supported "$cmd"; then
             PYTHON_CMD="$cmd"
             return 0
         fi
@@ -188,12 +202,12 @@ _find_python_cmd() {
 
 check_python() {
     if ! _find_python_cmd; then
-        echo "⚠ Python 3.11+ not found. Attempting to install..."
+        echo "⚠ No supported Python (3.11-3.14) found. Attempting to install..."
         install_python
 
         if ! _find_python_cmd; then
-            echo "✗ Failed to install Python 3.11+ automatically."
-            echo "Please manually install Python 3.11 or higher."
+            echo "✗ Failed to install a supported Python automatically."
+            echo "Please manually install Python 3.11-3.14."
             if [[ "$OS" == "linux" ]] && [[ "$DISTRO" == "ubuntu" ]]; then
                 echo ""
                 echo "For Ubuntu, you may need to add the deadsnakes PPA:"

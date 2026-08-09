@@ -16,8 +16,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app/backend
 
-COPY backend/requirements.txt backend/requirements-worker.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-worker.txt
+# requirements-worker.lock is compiled from requirements.txt + requirements-worker.txt
+# together, so it covers both. The .txt specs come along as fallback/provenance.
+COPY backend/requirements.txt backend/requirements-worker.txt backend/requirements-worker.lock ./
+RUN pip install --no-cache-dir -r requirements-worker.lock
 
 COPY backend/core ./core
 COPY backend/services ./services

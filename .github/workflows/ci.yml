@@ -17,8 +17,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13']
-    # 3.11 is the reference version and hard-gates. 3.12/3.13 still run and
+        python-version: ['3.11', '3.12', '3.13', '3.14']
+    # 3.11 is the reference version and hard-gates. 3.12/3.13/3.14 still run and
     # report, but don't block the PR — a transitive dependency may not yet ship
     # wheels for the newest interpreter (that's a dep issue, not a test failure).
     continue-on-error: ${{ matrix.python-version != '3.11' }}
@@ -30,10 +30,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install dependencies
+      # Install from the lockfile so the gate tests exactly what users get.
+      # Drift against the unpinned spec is caught by the dependency-drift job in
+      # nightly.yml, which deliberately resolves latest and runs the MCP boot
+      # tests — that's the early warning, this is the protection.
+      - name: Install dependencies (locked)
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install -r backend/requirements.lock
           pip install -r backend/requirements-test.txt
 
       - name: Run fast test suite (the deploy gate)
@@ -68,6 +72,18 @@ jobs:
             coverage.xml
             junit.xml
           if-no-files-found: ignore
+
+  # ── lockfile freshness ──────────────────────────────────────────────────────
+  # backend/requirements.lock is what installers and the gate above resolve, so
+  # a lock that no longer matches requirements*.txt means CI is testing an
+  # environment users won't get. Cheap, matrix-independent, so it runs once.
+  lockfile-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Locks match requirements*.txt
+        run: ./scripts/lock-deps.sh --check
 
   # Installation validation (pip/npm/docker-compose/setup scripts) lives in a
   # dedicated workflow: .github/workflows/install.yml
