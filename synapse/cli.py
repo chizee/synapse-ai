@@ -569,6 +569,28 @@ def _terminate_pid(pid: int, name: str, timeout: int = 5) -> bool:
         return not _is_running(pid)
 
 
+def _requirements_source(base_name: str) -> "tuple[Path | None, bool]":
+    """Resolve which requirements file to install, preferring the lockfile.
+
+    Returns (path, is_locked). `path` is None when neither file exists.
+
+    backend/<base>.lock pins the entire transitive tree, so every install
+    reproduces the environment CI tested. backend/<base>.txt is the fallback:
+    it carries upper bounds, but transitive dependencies still float, which is
+    how an unpinned `mcp` once resolved to the 2.0.0 rewrite and took out every
+    native tool server. Regenerate locks with scripts/lock-deps.sh.
+    """
+    lockfile = BACKEND_DIR / f"{base_name}.lock"
+    if lockfile.exists():
+        return lockfile, True
+
+    spec = BACKEND_DIR / f"{base_name}.txt"
+    if spec.exists():
+        return spec, False
+
+    return None, False
+
+
 def _ensure_coding_deps() -> None:
     """
     Ensure cocoindex and psycopg are installed and up-to-date in the backend venv.
@@ -597,11 +619,16 @@ def _ensure_coding_deps() -> None:
         return  # All good — nothing to do.
 
     print("  Coding-agent dependencies missing or outdated - installing now...")
-    result = subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "-q", "--upgrade", "-r", str(coding_req)],
-        capture_output=True,
-        text=True,
-    )
+    # Constrain to the lockfile when present. This runs on every `synapse start`
+    # with --upgrade, so without a constraint it is a standing drift vector:
+    # it would happily pull a new major of a shared transitive dependency into
+    # an otherwise locked environment.
+    pip_args = [str(venv_python), "-m", "pip", "install", "-q", "--upgrade", "-r", str(coding_req)]
+    lockfile = BACKEND_DIR / "requirements.lock"
+    if lockfile.exists():
+        pip_args += ["-c", str(lockfile)]
+
+    result = subprocess.run(pip_args, capture_output=True, text=True)
     if result.returncode == 0:
         print("  Coding-agent dependencies installed.")
     else:
@@ -1203,9 +1230,14 @@ def _upgrade_command():
 
     if _venv_is_healthy():
         # Upgrade in place — avoids deleting locked/protected files on Windows
-        # and is faster on all platforms. Safe because requirements.txt uses
-        # loose pinning (bare package names), so --upgrade gets the same result
-        # as a clean install.
+        # and is faster on all platforms. Safe because we install from a
+        # fully-pinned lockfile, so --upgrade converges on exactly the versions
+        # a clean install would produce.
+        #
+        # This used to rely on requirements.txt carrying bare package names, on
+        # the theory that "latest always" made --upgrade equivalent to a fresh
+        # install. It did — including the time it upgraded users onto the mcp
+        # 2.0.0 rewrite and every native tool server stopped loading.
         print("  Existing virtual environment found, upgrading packages in place...")
         pip_extra = ["--upgrade"]
     else:
@@ -1222,26 +1254,36 @@ def _upgrade_command():
     subprocess.run([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"],
                    capture_output=True)
 
-    # Install requirements
-    req_txt = BACKEND_DIR / "requirements.txt"
-    if req_txt.exists():
-        print("  Installing backend requirements...")
+    # Install requirements from the lockfile when it's available.
+    #
+    # requirements.lock pins the full transitive tree, so every user resolves
+    # the same environment CI tested. requirements.txt is the fallback for
+    # source checkouts predating the lock; it carries upper bounds but leaves
+    # transitive versions floating.
+    base_req, base_is_locked = _requirements_source("requirements")
+    if base_req is not None:
+        label = "lockfile" if base_is_locked else "requirements.txt (unlocked)"
+        print(f"  Installing backend requirements from {label}...")
         subprocess.check_call([str(python_exe), "-m", "pip", "install",
-                               *pip_extra, "-r", str(req_txt)])
+                               *pip_extra, "-r", str(base_req)])
     else:
-        print(f"  Warning: {req_txt} not found -- skipping requirements.")
+        print(f"  Warning: no requirements found in {BACKEND_DIR} -- skipping.")
 
     # Always install coding-agent deps (cocoindex, psycopg, numpy).
     # These are small and needed as soon as the user enables "Code Indexing"
     # in the UI — we don't want them to have to run upgrade again just because
     # they toggled a setting after the initial install.
-    coding_req = BACKEND_DIR / "requirements-coding.txt"
-    if coding_req.exists():
-        print("  Installing coding-agent requirements (cocoindex, psycopg)...")
-        subprocess.check_call([str(python_exe), "-m", "pip", "install",
-                               *pip_extra, "-r", str(coding_req)])
-    else:
-        print(f"  Warning: {coding_req} not found -- skipping.")
+    #
+    # requirements.lock is compiled from requirements.txt + requirements-coding.txt
+    # together, so when we installed the lock these are already present.
+    if not base_is_locked:
+        coding_req = BACKEND_DIR / "requirements-coding.txt"
+        if coding_req.exists():
+            print("  Installing coding-agent requirements (cocoindex, psycopg)...")
+            subprocess.check_call([str(python_exe), "-m", "pip", "install",
+                                   *pip_extra, "-r", str(coding_req)])
+        else:
+            print(f"  Warning: {coding_req} not found -- skipping.")
 
     # Messaging deps are heavier — only install when the user has opted in.
     import json as _json
@@ -1254,13 +1296,13 @@ def _upgrade_command():
             pass
 
     if _settings.get("messaging_enabled", False):
-        messaging_req = BACKEND_DIR / "requirements-messaging.txt"
-        if messaging_req.exists():
+        messaging_req, _ = _requirements_source("requirements-messaging")
+        if messaging_req is not None:
             print("  Installing messaging requirements...")
             subprocess.check_call([str(python_exe), "-m", "pip", "install",
                                    *pip_extra, "-r", str(messaging_req)])
         else:
-            print(f"  Warning: {messaging_req} not found -- skipping.")
+            print(f"  Warning: requirements-messaging not found in {BACKEND_DIR} -- skipping.")
 
     # Register synapse package via .pth file — no build hook, no bash required
     print("  Registering Synapse package...")
@@ -1650,6 +1692,10 @@ def _profile_command(action: str, output: str | None = None, limit: int = 20, du
 
 
 MIN_PYTHON = (3, 11)
+# Exclusive upper bound — keep in sync with requires-python in pyproject.toml.
+# Interpreters at or above this haven't been tested and will typically fail to
+# resolve prebuilt wheels for native dependencies.
+MAX_PYTHON = (3, 15)
 MIN_NODE   = (20, 9, 0)
 
 
@@ -1673,6 +1719,12 @@ def _warn_versions():
             f"Synapse requires Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+.\n"
             "  Please switch to Python 3.11 or newer (https://www.python.org/downloads/)\n"
             "  and reinstall: pip install synapse-ai"
+        )
+    elif py >= MAX_PYTHON:
+        print(
+            f"Warning: Python {py[0]}.{py[1]} detected -- "
+            f"Synapse is tested up to Python {MAX_PYTHON[0]}.{MAX_PYTHON[1] - 1}.\n"
+            "  Dependencies may not have prebuilt wheels for this interpreter."
         )
 
     # ── Node.js ───────────────────────────────────────────────────────────────

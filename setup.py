@@ -369,11 +369,21 @@ def check_python():
     if v < (3, 11):
         err(f"Python 3.11+ required. You have {v.major}.{v.minor}.{v.micro}")
         sys.exit(1)
-    if v >= (3, 14):
+    if v >= (3, 15):
         err(f"Python {v.major}.{v.minor} is not yet supported (prebuilt packages are "
             f"unavailable, and source builds need a C/C++ toolchain).")
-        info("  Install Python 3.11-3.13 from https://www.python.org/downloads/")
+        info("  Install Python 3.11-3.14 from https://www.python.org/downloads/")
         sys.exit(1)
+
+    # 3.14 resolves wheel-only on Linux and Windows, and on Apple Silicon running
+    # macOS 14+. It cannot resolve on Intel Macs: onnxruntime (via chromadb)
+    # publishes no x86_64 macOS wheel for cp314. Warn rather than block — the
+    # pip failure would otherwise be an inscrutable resolver error.
+    if v[:2] >= (3, 14) and sys.platform == "darwin" and platform.machine() != "arm64":
+        warn(f"Python {v.major}.{v.minor} on Intel macOS has no prebuilt onnxruntime wheel "
+             f"(a chromadb dependency), so the install will likely fail.")
+        info("  Use Python 3.13 on Intel Macs: https://www.python.org/downloads/")
+
     ok(f"Python {v.major}.{v.minor}.{v.micro}")
 
     # Check that the venv module is available for this Python installation.
@@ -1666,6 +1676,30 @@ def _run_with_retry(cmd, retries=4, delay=5, **kwargs):
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
+def _requirements_source(base_name, backend_dir=None):
+    """Resolve which requirements file to install, preferring the lockfile.
+
+    Returns (path, is_locked); path is None when neither file exists.
+
+    <base>.lock pins the entire transitive tree so every install reproduces the
+    environment CI tested. <base>.txt is the fallback for checkouts predating
+    the lock: it carries upper bounds, but transitive versions still float —
+    which is how an unpinned `mcp` resolved to the 2.0.0 rewrite and left every
+    native tool server failing to load. Regenerate with scripts/lock-deps.sh.
+    """
+    directory = backend_dir if backend_dir is not None else BACKEND_DIR
+
+    lockfile = os.path.join(directory, base_name + ".lock")
+    if os.path.exists(lockfile):
+        return lockfile, True
+
+    spec = os.path.join(directory, base_name + ".txt")
+    if os.path.exists(spec):
+        return spec, False
+
+    return None, False
+
+
 def install_backend(coding_enabled, messaging_enabled=False):
     step("Installing Backend Dependencies")
 
@@ -1677,28 +1711,37 @@ def install_backend(coding_enabled, messaging_enabled=False):
 
     info("Installing base requirements...")
     _run_with_retry([PYTHON_EXE, "-m", "pip", "install", "--upgrade", "pip"])
-    _run_with_retry([PYTHON_EXE, "-m", "pip", "install", "-r", os.path.join(BACKEND_DIR, "requirements.txt")])
-    ok("Base dependencies installed.")
+    base_req, base_is_locked = _requirements_source("requirements")
+    if base_req is None:
+        err(f"No requirements.lock or requirements.txt found in {BACKEND_DIR}")
+        sys.exit(1)
+    _run_with_retry([PYTHON_EXE, "-m", "pip", "install", "-r", base_req])
+    ok("Base dependencies installed"
+       + (" (from lockfile)." if base_is_locked else " (unlocked — no requirements.lock present)."))
 
     # Always install coding deps (cocoindex, psycopg, numpy) — they are needed
     # as soon as the user enables Code Indexing in the UI.  Installing them up
     # front avoids a second install step (and confusing "not found" errors).
-    coding_req = os.path.join(BACKEND_DIR, "requirements-coding.txt")
-    if os.path.exists(coding_req):
-        info("Installing coding-agent dependencies (cocoindex, psycopg, numpy)...")
-        _run_with_retry([PYTHON_EXE, "-m", "pip", "install", "-r", coding_req])
-        ok("Coding-agent dependencies installed.")
-    else:
-        warn(f"requirements-coding.txt not found at {coding_req}")
+    #
+    # requirements.lock is compiled from requirements.txt + requirements-coding.txt
+    # together, so installing the lock already covered these.
+    if not base_is_locked:
+        coding_req = os.path.join(BACKEND_DIR, "requirements-coding.txt")
+        if os.path.exists(coding_req):
+            info("Installing coding-agent dependencies (cocoindex, psycopg, numpy)...")
+            _run_with_retry([PYTHON_EXE, "-m", "pip", "install", "-r", coding_req])
+            ok("Coding-agent dependencies installed.")
+        else:
+            warn(f"requirements-coding.txt not found at {coding_req}")
 
     if messaging_enabled:
-        messaging_req = os.path.join(BACKEND_DIR, "requirements-messaging.txt")
-        if os.path.exists(messaging_req):
+        messaging_req, _ = _requirements_source("requirements-messaging")
+        if messaging_req is not None:
             info("Installing messaging integration dependencies...")
             _run_with_retry([PYTHON_EXE, "-m", "pip", "install", "-r", messaging_req])
             ok("Messaging dependencies installed.")
         else:
-            warn(f"requirements-messaging.txt not found at {messaging_req}")
+            warn(f"No requirements-messaging.lock or .txt found in {BACKEND_DIR}")
 
     info("Registering Synapse package...")
     _register_synapse_pth(VENV_DIR, ROOT_DIR)
@@ -2104,22 +2147,29 @@ def _rebuild_backend(install_dir):
         ok("Virtual environment created.")
 
     pip_cmd = [python_exe, "-m", "pip", "install"]
-    req_txt  = os.path.join(backend_dir, "requirements.txt")
+    base_req, base_is_locked = _requirements_source("requirements", backend_dir)
 
     info("Upgrading pip...")
     subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pip"],
                    capture_output=True)
 
-    info("Installing / upgrading backend requirements...")
-    subprocess.check_call(pip_cmd + ["-r", req_txt])
+    if base_req is None:
+        warn(f"No requirements.lock or requirements.txt found in {backend_dir}")
+    else:
+        info("Installing / upgrading backend requirements"
+             + (" from lockfile..." if base_is_locked else " (unlocked)..."))
+        subprocess.check_call(pip_cmd + ["-r", base_req])
 
     # Always install coding deps (cocoindex, psycopg, numpy).
-    coding_req = os.path.join(backend_dir, "requirements-coding.txt")
-    if os.path.exists(coding_req):
-        info("Installing coding-agent requirements (cocoindex, psycopg, numpy)...")
-        subprocess.check_call(pip_cmd + ["-r", coding_req])
-    else:
-        warn(f"requirements-coding.txt not found at {coding_req}")
+    # The lock is compiled from requirements.txt + requirements-coding.txt, so
+    # installing it already covered these.
+    if not base_is_locked:
+        coding_req = os.path.join(backend_dir, "requirements-coding.txt")
+        if os.path.exists(coding_req):
+            info("Installing coding-agent requirements (cocoindex, psycopg, numpy)...")
+            subprocess.check_call(pip_cmd + ["-r", coding_req])
+        else:
+            warn(f"requirements-coding.txt not found at {coding_req}")
 
     # Messaging deps are heavier — only install when opted in.
     _settings: dict = {}
@@ -2132,12 +2182,12 @@ def _rebuild_backend(install_dir):
             pass
 
     if _settings.get("messaging_enabled", False):
-        messaging_req = os.path.join(backend_dir, "requirements-messaging.txt")
-        if os.path.exists(messaging_req):
+        messaging_req, _ = _requirements_source("requirements-messaging", backend_dir)
+        if messaging_req is not None:
             info("Installing messaging requirements...")
             subprocess.check_call(pip_cmd + ["-r", messaging_req])
         else:
-            warn(f"requirements-messaging.txt not found at {messaging_req}")
+            warn(f"No requirements-messaging.lock or .txt found in {backend_dir}")
 
     info("Registering Synapse package...")
     _register_synapse_pth(venv_dir, install_dir)

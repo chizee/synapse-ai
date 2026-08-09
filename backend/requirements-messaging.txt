@@ -1,6 +1,8 @@
-python-telegram-bot>=20.0
-discord.py>=2.3
-slack-bolt>=1.18
-botframework-connector>=4.15
-botbuilder-integration-aiohttp>=4.15
-twilio>=8.0
+# Messaging-channel extras (Telegram / Discord / Slack / Teams / Twilio).
+# Upper bounds are mandatory here too — see the header of requirements.txt.
+python-telegram-bot>=20.0,<23
+discord.py>=2.3,<3
+slack-bolt>=1.18,<2
+botframework-connector>=4.15,<5
+botbuilder-integration-aiohttp>=4.15,<5
+twilio>=8.0,<10
