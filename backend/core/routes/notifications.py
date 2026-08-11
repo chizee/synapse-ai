@@ -27,12 +27,12 @@ async def list_notifications(after: int = 0):
 
 async def _stream_notifications(after_id: int):
     # Subscribe BEFORE replaying the ring so nothing falls between replay and
-    # tail; duplicates from the overlap window are dropped by the monotonic id.
+    # tail. The tail forwards every queued item unconditionally: an item with
+    # an already-seen id is an UPDATE (e.g. human input resolved) — clients
+    # upsert by id, which also makes replay-overlap duplicates harmless.
     queue = hub.subscribe()
     try:
-        last = after_id
-        for item in hub.list(after_id=last):
-            last = item["id"]
+        for item in hub.list(after_id=after_id):
             yield f"id: {item['id']}\ndata: {json.dumps(item, default=str)}\n\n"
         while True:
             try:
@@ -40,9 +40,6 @@ async def _stream_notifications(after_id: int):
             except asyncio.TimeoutError:
                 yield ": keepalive\n\n"
                 continue
-            if item["id"] <= last:
-                continue
-            last = item["id"]
             yield f"id: {item['id']}\ndata: {json.dumps(item, default=str)}\n\n"
     finally:
         hub.unsubscribe(queue)

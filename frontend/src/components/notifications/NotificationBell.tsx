@@ -50,13 +50,16 @@ export function NotificationBell() {
                             <div className="px-3 py-6 text-xs text-zinc-600 text-center italic">
                                 No notifications yet.
                             </div>
-                        ) : recent.map(n => (
+                        ) : recent.map(n => {
+                            const answered = n.kind === 'human_input' && n.resolved;
+                            return (
                             <button
                                 key={n.id}
                                 onClick={() => { setOpen(false); openRun(n.run_id); }}
-                                className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-zinc-800/70 transition-colors border-b border-zinc-800/50"
+                                className={`w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-zinc-800/70 transition-colors border-b border-zinc-800/50 ${answered ? 'opacity-50' : ''}`}
                             >
-                                {n.kind === 'human_input' ? <PauseCircle size={14} className="text-amber-400 shrink-0 mt-0.5" /> :
+                                {answered ? <CheckCircle2 size={14} className="text-zinc-500 shrink-0 mt-0.5" /> :
+                                 n.kind === 'human_input' ? <PauseCircle size={14} className="text-amber-400 shrink-0 mt-0.5" /> :
                                  n.kind === 'run_failed' ? <AlertCircle size={14} className="text-red-400 shrink-0 mt-0.5" /> :
                                  <CheckCircle2 size={14} className="text-green-400 shrink-0 mt-0.5" />}
                                 <span className="flex-1 min-w-0">
@@ -64,10 +67,12 @@ export function NotificationBell() {
                                     {n.body && <span className="block text-[11px] text-zinc-500 truncate">{n.body}</span>}
                                     <span className="block text-[10px] text-zinc-600 mt-0.5">
                                         {new Date(n.ts * 1000).toLocaleTimeString()}
+                                        {answered ? ' · answered' : ''}
                                     </span>
                                 </span>
                             </button>
-                        ))}
+                            );
+                        })}
                     </div>
                     <label className="flex items-center gap-2 px-3 py-2.5 border-t border-zinc-800 cursor-pointer hover:bg-zinc-800/50">
                         <input

@@ -13,6 +13,8 @@ export type RunNotification = {
     body: string;
     run_id: string | null;
     data: Record<string, any>;
+    // Set server-side once the requested input was submitted (or the run ended).
+    resolved?: boolean;
 };
 
 type Toast = { key: number; message: string; type: 'success' | 'warning' | 'error' };
@@ -73,10 +75,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     const handleNotification = useCallback((item: RunNotification, live: boolean) => {
         setNotifications(prev => {
-            if (prev.some(n => n.id === item.id)) return prev;
+            // Upsert: a re-delivered id is an update (e.g. human input resolved).
+            if (prev.some(n => n.id === item.id)) {
+                return prev.map(n => (n.id === item.id ? item : n));
+            }
             return [...prev.slice(-99), item];
         });
-        if (!live) return;  // replayed history: no toast/browser popup
+        if (!live || item.resolved) return;  // history/updates: no toast/browser popup
         window.dispatchEvent(new CustomEvent(NOTIFICATION_EVENT, { detail: item }));
         toast(item.title, item.kind === 'run_failed' ? 'error'
             : item.kind === 'human_input' ? 'warning' : 'success');
@@ -107,7 +112,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                 const abort = new AbortController();
                 controller.current = abort;
                 try {
-                    const res = await fetch(`/api/notifications/stream?after=${lastIdRef.current}`,
+                    // Always replay the full ring: re-received ids are upserted, and
+                    // updates to old items (resolved flags) survive reconnects.
+                    const res = await fetch('/api/notifications/stream?after=0',
                         { signal: abort.signal });
                     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
                     const reader = res.body.getReader();

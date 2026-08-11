@@ -109,8 +109,10 @@ class NotificationHub:
             self._terminal_notified.discard(run_id)
         elif etype == "step_start":
             # Any forward progress re-arms terminal notification (a resumed
-            # run emits no orchestration_start).
+            # run emits no orchestration_start) and means any pending
+            # human-input request for this run was answered.
             self._terminal_notified.discard(run_id)
+            self._resolve_human_input(run_id)
         elif etype == "human_input_required":
             name = self._orch_name(run_id)
             self.publish(
@@ -120,6 +122,7 @@ class NotificationHub:
                 data={"step_id": event.get("orch_step_id")},
             )
         elif etype == "orchestration_complete":
+            self._resolve_human_input(run_id)
             if run_id in self._terminal_notified:
                 return
             self._terminal_notified.add(run_id)
@@ -130,6 +133,7 @@ class NotificationHub:
             else:
                 self.publish("run_failed", f"{name} {status}", run_id=run_id)
         elif etype == "orchestration_error":
+            self._resolve_human_input(run_id)
             if run_id in self._terminal_notified:
                 return
             self._terminal_notified.add(run_id)
@@ -138,6 +142,24 @@ class NotificationHub:
                          body=str(event.get("error") or ""), run_id=run_id)
         elif etype == "run_stream_end" and not event.get("paused"):
             self._orch_names.pop(run_id, None)
+
+    def _resolve_human_input(self, run_id: str):
+        """Mark this run's human-input notifications answered. The updated
+        items (same id, resolved=true) are re-pushed to live subscribers;
+        clients upsert by id so the bell stops showing them as actionable."""
+        updated = [
+            item for item in self._items
+            if item["run_id"] == run_id and item["kind"] == "human_input"
+            and not item.get("resolved")
+        ]
+        if not updated:
+            return
+        for item in updated:
+            item["resolved"] = True
+        self._persist()
+        for queue in list(self._subs):
+            for item in updated:
+                queue.put_nowait(item)
 
     def _orch_name(self, run_id: str) -> str:
         """Cached name, with a checkpoint fallback for resumed runs (which
@@ -162,24 +184,35 @@ class NotificationHub:
         (the server may have restarted since the pause fired)."""
         try:
             from core.orchestration.state import SharedState
-            notified_runs = {i["run_id"] for i in self._items if i["kind"] == "human_input"}
+            # Only an *unresolved* item counts as already-notified: a run that
+            # paused again at a later step deserves a fresh notification.
+            notified_runs = {
+                i["run_id"] for i in self._items
+                if i["kind"] == "human_input" and not i.get("resolved")
+            }
+            paused_waiting: set[str] = set()
             for summary in SharedState.list_runs(limit=limit):
                 if summary.get("status") != "paused":
                     continue
                 run_id = summary.get("run_id") or ""
-                if run_id in notified_runs:
-                    continue
                 try:
                     run = SharedState.restore(run_id).run
                 except Exception:
                     continue
-                if run.waiting_for_human:
+                if not run.waiting_for_human:
+                    continue
+                paused_waiting.add(run_id)
+                if run_id not in notified_runs:
                     self.publish(
                         "human_input",
                         f"{self._orch_name(run_id)} needs your input",
                         body=str(run.human_prompt or ""),
                         run_id=run_id,
                     )
+            # Inverse sweep: unresolved items whose run is no longer waiting
+            # (answered/failed/swept while we were down) get resolved.
+            for run_id in notified_runs - paused_waiting:
+                self._resolve_human_input(run_id)
         except Exception as e:
             print(f"Warning: notification reconstruction failed: {e}", flush=True)
 
