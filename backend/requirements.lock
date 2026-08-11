@@ -53,9 +53,9 @@ beautifulsoup4==4.15.0
     # via
     #   -r requirements.txt
     #   crawl4ai
-boto3==1.43.67
+boto3==1.43.69
     # via -r requirements.txt
-botocore==1.43.67
+botocore==1.43.69
     # via
     #   boto3
     #   s3transfer
@@ -164,7 +164,7 @@ googleapis-common-protos==1.75.1
     # via
     #   google-api-core
     #   opentelemetry-exporter-otlp-proto-grpc
-greenlet==3.5.4
+greenlet==3.5.5
     # via
     #   patchright
     #   playwright
@@ -298,7 +298,7 @@ ollama==0.6.2
     # via -r requirements.txt
 onnxruntime==1.28.0
     # via chromadb
-openai==2.53.0
+openai==2.54.0
     # via unclecode-litellm
 openpyxl==3.1.5
     # via -r requirements.txt
@@ -515,7 +515,7 @@ snowballstemmer==2.2.0
     # via crawl4ai
 soupsieve==2.9.2
     # via beautifulsoup4
-sqlalchemy==2.0.51
+sqlalchemy==2.0.52
     # via -r requirements.txt
 sse-starlette==3.4.8
     # via mcp
@@ -573,7 +573,7 @@ typing-extensions==4.16.0
     #   sqlalchemy
     #   starlette
     #   typing-inspection
-typing-inspection==0.4.2
+typing-inspection==0.4.3
     # via
     #   fastapi
     #   mcp
