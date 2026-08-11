@@ -8,10 +8,16 @@ in a fresh task raises "Attempted to exit cancel scope in a different task"
 (issue #356).
 
 Every orchestration entry point goes through here, so the launch path can no
-longer change how the engine is driven.
+longer change how the engine is driven. That makes the pump the single choke
+point for run observability: every event is appended to the run's journal
+(`journal.FileRunJournal`) and fanned out to live tails (`journal.broker`)
+before it reaches the SSE queue. A journal/broker/observer failure must never
+kill a run -- all three are best-effort.
 """
 import asyncio
 from typing import AsyncGenerator
+
+from core.orchestration.journal import broker, close_journal, get_journal
 
 # Live in-process runs, keyed by run_id. The cancel endpoint cancels the task
 # to interrupt an in-progress await; the run-status endpoint consults it to
@@ -20,6 +26,29 @@ _active_tasks: dict[str, asyncio.Task] = {}
 
 # Queue marker meaning "the engine generator is exhausted".
 SENTINEL = object()
+
+# Observers called as fn(run_id, event) for every pumped event (best-effort).
+# core.notifications registers here to derive user-facing notifications from
+# lifecycle events without the pump knowing about notification semantics.
+event_observers: list = []
+
+
+def _observe(run_id: str, event: dict):
+    """Journal + broadcast + notify for one event. Never raises."""
+    entry_id = 0
+    try:
+        entry_id = get_journal(run_id).append(event)
+    except Exception as e:
+        print(f"WARNING: journal append failed for '{run_id}': {e}", flush=True)
+    try:
+        broker.publish(run_id, {"id": entry_id, "event": event})
+    except Exception:
+        pass
+    for observer in event_observers:
+        try:
+            observer(run_id, event)
+        except Exception:
+            pass
 
 
 def spawn_engine_run(agen, run_id: str) -> tuple[asyncio.Task, asyncio.Queue]:
@@ -32,19 +61,39 @@ def spawn_engine_run(agen, run_id: str) -> tuple[asyncio.Task, asyncio.Queue]:
     queue: asyncio.Queue = asyncio.Queue()
 
     async def _pump():
+        last_type = None
         try:
             async for event in agen:
+                _observe(run_id, event)
+                last_type = event.get("type")
                 await queue.put(event)
                 # Yield so the SSE consumer can dequeue and flush this event
                 # to the HTTP response before the next one is enqueued.
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
-            await queue.put({"type": "orchestration_error", "error": "Cancelled"})
+            event = {"type": "orchestration_error", "error": "Cancelled"}
+            _observe(run_id, event)
+            last_type = event["type"]
+            await queue.put(event)
         except FileNotFoundError:
-            await queue.put({"type": "orchestration_error", "error": "Run not found"})
+            event = {"type": "orchestration_error", "error": "Run not found"}
+            _observe(run_id, event)
+            last_type = event["type"]
+            await queue.put(event)
         except Exception as e:
-            await queue.put({"type": "orchestration_error", "error": str(e)})
+            event = {"type": "orchestration_error", "error": str(e)}
+            _observe(run_id, event)
+            last_type = event["type"]
+            await queue.put(event)
         finally:
+            # Journal/broker-only terminator (never sent on the POST SSE):
+            # tells tailing GET clients whether to stay open for a resume pump
+            # (paused on human input) or close (terminal).
+            _observe(run_id, {
+                "type": "run_stream_end",
+                "paused": last_type == "human_input_required",
+            })
+            close_journal(run_id)
             _active_tasks.pop(run_id, None)
             print(f"DEBUG SSE QUEUE: sentinel sent for '{run_id}', stream closing", flush=True)
             await queue.put(SENTINEL)

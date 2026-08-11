@@ -121,3 +121,100 @@ class TestErrorMapping:
         assert await queue.get() == {"type": "orchestration_error", "error": "Cancelled"}
         assert await queue.get() is SENTINEL
         assert "run_cancel" not in _active_tasks
+
+
+class TestJournaling:
+    """The pump is the observability choke point: every event it moves is
+    journaled and broadcast, and journal failures never touch the run."""
+
+    @staticmethod
+    def _journaled(run_id):
+        from core.orchestration.journal import FileRunJournal
+        return [e["event"] for e in FileRunJournal(run_id).read()]
+
+    async def test_every_event_journaled_with_terminal_marker(self):
+        from core.orchestration.runner import stream_engine_events
+
+        async def _src():
+            yield {"type": "step_start"}
+            yield {"type": "orchestration_complete", "status": "completed"}
+
+        [_, _] = [ev async for ev in stream_engine_events(_src(), "run_jr1")]
+        events = self._journaled("run_jr1")
+        assert [e["type"] for e in events] == [
+            "step_start", "orchestration_complete", "run_stream_end",
+        ]
+        assert events[-1]["paused"] is False
+
+    async def test_human_pause_marks_stream_end_paused(self):
+        from core.orchestration.runner import stream_engine_events
+
+        async def _src():
+            yield {"type": "step_start"}
+            yield {"type": "human_input_required", "prompt": "Approve?"}
+
+        _ = [ev async for ev in stream_engine_events(_src(), "run_jr_paused")]
+        events = self._journaled("run_jr_paused")
+        assert events[-1] == {"type": "run_stream_end", "paused": True}
+
+    async def test_synthesized_error_is_journaled(self):
+        from core.orchestration.runner import stream_engine_events
+
+        async def _src():
+            yield {"type": "step_start"}
+            raise ValueError("boom")
+
+        _ = [ev async for ev in stream_engine_events(_src(), "run_jr_err")]
+        types = [e["type"] for e in self._journaled("run_jr_err")]
+        assert types == ["step_start", "orchestration_error", "run_stream_end"]
+
+    async def test_resume_pump_continues_the_same_journal(self):
+        from core.orchestration.runner import stream_engine_events
+        from core.orchestration.journal import FileRunJournal
+
+        async def _first():
+            yield {"type": "human_input_required"}
+
+        async def _resume():
+            yield {"type": "orchestration_complete", "status": "completed"}
+
+        _ = [ev async for ev in stream_engine_events(_first(), "run_jr_seq")]
+        _ = [ev async for ev in stream_engine_events(_resume(), "run_jr_seq")]
+        entries = FileRunJournal("run_jr_seq").read()
+        assert [e["id"] for e in entries] == list(range(1, len(entries) + 1))
+        types = [e["event"]["type"] for e in entries]
+        assert types == ["human_input_required", "run_stream_end",
+                         "orchestration_complete", "run_stream_end"]
+
+    async def test_journal_failure_never_kills_the_run(self, monkeypatch):
+        import core.orchestration.runner as runner_mod
+
+        def _boom(run_id):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(runner_mod, "get_journal", _boom)
+
+        async def _src():
+            yield {"type": "step_start"}
+            yield {"type": "orchestration_complete", "status": "completed"}
+
+        events = [ev async for ev in runner_mod.stream_engine_events(_src(), "run_jr_fail")]
+        assert [e["type"] for e in events] == ["step_start", "orchestration_complete"]
+
+    async def test_pump_publishes_to_broker(self):
+        from core.orchestration.journal import broker
+        from core.orchestration.runner import stream_engine_events
+
+        queue = broker.subscribe("run_jr_live")
+        try:
+            async def _src():
+                yield {"type": "step_start"}
+
+            _ = [ev async for ev in stream_engine_events(_src(), "run_jr_live")]
+            first = queue.get_nowait()
+            assert first["id"] == 1
+            assert first["event"]["type"] == "step_start"
+            terminal = queue.get_nowait()
+            assert terminal["event"]["type"] == "run_stream_end"
+        finally:
+            broker.unsubscribe("run_jr_live", queue)

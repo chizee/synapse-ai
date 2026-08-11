@@ -75,6 +75,24 @@ def _isolate_data():
     yield
 
 
+# ── run-event journal isolation (autouse) ────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _isolate_run_journals(tmp_path, monkeypatch):
+    """Point the run-event journal at a per-test temp dir.
+
+    EVENTS_DIR lives under backend/logs (not DATA_DIR), so without this every
+    test that pumps engine events would append .jsonl files into the repo.
+    The registry is cleared so shared journal instances (with their cached
+    paths/handles) never leak across tests.
+    """
+    import core.orchestration.journal as journal_mod
+    monkeypatch.setattr(journal_mod, "EVENTS_DIR", tmp_path / "orchestration_events")
+    journal_mod._journals.clear()
+    yield
+    for run_id in list(journal_mod._journals):
+        journal_mod.close_journal(run_id)
+
+
 # ── fake LLM (autouse) ───────────────────────────────────────────────────────
 @pytest.fixture(autouse=True)
 def fake_llm(monkeypatch):

@@ -308,6 +308,7 @@ class ScheduleManager:
         from core.json_store import JsonStore
         from core.models_orchestration import Orchestration
         from core.orchestration.engine import OrchestrationEngine
+        from core.orchestration.runner import stream_engine_events
 
         orch_store = JsonStore(str(_DATA_DIR / "orchestrations.json"), default_factory=list)
         orchs = orch_store.load()
@@ -320,7 +321,13 @@ class ScheduleManager:
 
         session_id = f"schedule_{s['id']}"
         final_response = ""
-        async for event in engine.run(s.get("prompt", ""), sched_log.run_id, session_id=session_id):
+        # Through the runner pump: the run is journaled and visible to the
+        # reattach UI / notifications like any UI-started run (issue #356
+        # single-task discipline included).
+        async for event in stream_engine_events(
+            engine.run(s.get("prompt", ""), sched_log.run_id, session_id=session_id),
+            sched_log.run_id,
+        ):
             sched_log.log_event(event)
             if event.get("type") == "final":
                 final_response = event.get("response", "")
