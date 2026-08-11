@@ -539,12 +539,19 @@ async def lifespan(app: FastAPI):
             zombie_runs = [r for r in SharedState.list_runs(limit=200) if r.get("status") == "running"]
             if zombie_runs:
                 now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                from core.orchestration.journal import FileRunJournal
                 for zr in zombie_runs:
                     try:
                         restored = SharedState.restore(zr["run_id"])
                         restored.run.status = "failed"
                         restored.run.ended_at = now_str
                         restored.checkpoint()
+                        # Explain the stop to journal replays (reattach UI).
+                        if FileRunJournal.exists(zr["run_id"]):
+                            journal = FileRunJournal(zr["run_id"])
+                            journal.append({"type": "orchestration_error",
+                                            "error": "Server restarted while the run was in progress"})
+                            journal.close()
                     except Exception:
                         pass
                 print(f"Swept {len(zombie_runs)} zombie orchestration run(s) (marked failed)")

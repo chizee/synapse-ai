@@ -241,6 +241,7 @@ async def v1_orchestration_run(
     from core.routes.orchestrations import load_orchestrations
     from core.models_orchestration import Orchestration
     from core.orchestration.engine import OrchestrationEngine
+    from core.orchestration.runner import stream_engine_events
 
     orchs = load_orchestrations()
     orch_data = next((o for o in orchs if o["id"] == orch_id), None)
@@ -257,13 +258,21 @@ async def v1_orchestration_run(
     shared_state = {}
     status = "running"
 
-    async for event in engine.run(body.message, run_id):
+    # Through the runner pump so the run is journaled, registered for
+    # cancellation, and survives a dropped client (the engine itself is
+    # advanced by the pump's task — issue #356).
+    async for event in stream_engine_events(engine.run(body.message, run_id), run_id):
         etype = event.get("type", "")
 
         if etype == "human_input_required":
             human_input_event = event
             status = "paused"
             break
+
+        if etype == "orchestration_error":
+            # The pump surfaces engine exceptions as events instead of raising.
+            status = "failed"
+            final_response = final_response or f"Orchestration error: {event.get('error', '')}"
 
         if etype == "orchestration_complete":
             status = event.get("status", "completed")
@@ -381,13 +390,26 @@ async def v1_orchestration_resume(
     _allowed_statuses = {"running", "paused", "completed", "failed"}
 
     try:
-        async for event in OrchestrationEngine.resume(run_id, human_response, _server):
+        # Through the runner pump so the resumed run is journaled and
+        # registered for cancellation (single-task discipline, issue #356).
+        from core.orchestration.runner import stream_engine_events
+        async for event in stream_engine_events(
+            OrchestrationEngine.resume(run_id, human_response, _server), run_id
+        ):
             etype = event.get("type", "")
 
             if etype == "human_input_required":
                 human_input_event = event
                 status = "paused"
                 break
+
+            if etype == "orchestration_error":
+                # The pump surfaces engine exceptions as events instead of
+                # raising; keep the pre-pump HTTP semantics for "not found".
+                if str(event.get("error", "")) == "Run not found":
+                    raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+                status = "failed"
+                final_response = final_response or f"Orchestration error: {event.get('error', '')}"
 
             if etype == "orchestration_complete":
                 _raw_status = event.get("status", "completed")
@@ -398,6 +420,8 @@ async def v1_orchestration_resume(
                 final_response = event.get("response", "")
                 step_history = event.get("data", {}).get("step_history", []) if event.get("data") else []
 
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     except Exception as exc:

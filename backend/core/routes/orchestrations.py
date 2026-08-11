@@ -1,6 +1,7 @@
 """
 Orchestration management endpoints: CRUD, run, human-input, cancel.
 """
+import asyncio
 import os
 import json
 import time
@@ -41,6 +42,177 @@ async def list_runs():
     """List recent orchestration runs."""
     from core.orchestration.state import SharedState
     return SharedState.list_runs()
+
+
+def _run_summary(run_id: str) -> dict | None:
+    """Small status snapshot from the checkpoint (None if no checkpoint yet)."""
+    from core.orchestration.state import SharedState
+    try:
+        run = SharedState.restore(run_id).run
+        return {
+            "run_id": run.run_id,
+            "orchestration_id": run.orchestration_id,
+            "status": run.status,
+            "current_step_id": run.current_step_id,
+            "waiting_for_human": run.waiting_for_human,
+            "started_at": run.started_at,
+            "ended_at": run.ended_at,
+        }
+    except FileNotFoundError:
+        return None
+
+
+def _run_is_terminal(run_id: str) -> bool:
+    summary = _run_summary(run_id)
+    return summary is not None and summary["status"] in ("completed", "failed", "cancelled")
+
+
+# Seconds between keepalive comments while tailing an idle run (patchable in tests).
+_TAIL_KEEPALIVE_SECONDS = 15
+
+
+@router.get("/api/orchestrations/runs/{run_id}/events")
+async def get_run_events(run_id: str, request: Request, after: int = 0, limit: int = 5000):
+    """Replay a run's journaled events (id > `after`), oldest first.
+
+    Standalone runs read the JSONL journal; V2/worker runs (no journal file)
+    fall back to the Redis Stream the scale workers publish to.
+    """
+    from core.orchestration.journal import FileRunJournal
+
+    if FileRunJournal.exists(run_id) or run_id in _active_tasks:
+        # Throwaway reader — only the pump registers journals (get_journal),
+        # so finished runs don't accumulate in the registry.
+        events = FileRunJournal(run_id).read(after_id=after, limit=limit)
+        return {
+            "events": events,
+            "last_id": events[-1]["id"] if events else after,
+            "run": _run_summary(run_id),
+        }
+
+    redis = getattr(request.app.state, "redis", None)
+    if redis is not None:
+        from core.scale.event_bridge import get_run_events as redis_run_events
+        events = await redis_run_events(redis, run_id)
+        if events:
+            return {
+                "events": events,
+                "last_id": events[-1]["id"],
+                "run": _run_summary(run_id),
+            }
+
+    if _run_summary(run_id) is not None:
+        # Pre-journal run: checkpoint exists but no events were recorded.
+        return {"events": [], "last_id": after, "run": _run_summary(run_id)}
+    raise HTTPException(status_code=404, detail="Run not found")
+
+
+async def _stream_journal_sse(run_id: str, after_id: int):
+    """SSE generator: journal replay from `after_id`, then live tail.
+
+    Subscribes to the broker BEFORE reading the file so no event can fall
+    between replay and tail; duplicates delivered during the replay window are
+    dropped by the monotonic-id check. A `run_stream_end` from the pump closes
+    the stream when terminal and keeps it open when paused (the resume pump
+    appends to the same journal/broker, so the tail just continues).
+    """
+    from core.orchestration.journal import FileRunJournal, broker
+
+    journal = FileRunJournal(run_id)  # throwaway reader; pump owns the registry
+    queue = broker.subscribe(run_id)
+    try:
+        last = after_id
+        saw_terminal_end = False
+        for entry in journal.read(after_id=last):
+            last = entry["id"]
+            event = entry["event"]
+            if event.get("type") == "run_stream_end":
+                # Internal pump marker — handled, never forwarded. A non-paused
+                # one means the run's last pump finished for good, which also
+                # covers runs that died before writing any checkpoint.
+                saw_terminal_end = not event.get("paused")
+                continue
+            saw_terminal_end = False
+            yield f"id: {entry['id']}\ndata: {json.dumps(event, default=str)}\n\n"
+
+        # Replay finished. If nothing is running and the run ended (journal
+        # terminator or terminal checkpoint), there is nothing to tail.
+        if run_id not in _active_tasks and (saw_terminal_end or _run_is_terminal(run_id)):
+            yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
+            return
+
+        while True:
+            try:
+                entry = await asyncio.wait_for(queue.get(), timeout=_TAIL_KEEPALIVE_SECONDS)
+            except asyncio.TimeoutError:
+                # Pump died without a run_stream_end (crash) — close once the
+                # checkpoint says the run is over instead of idling forever.
+                if run_id not in _active_tasks and _run_is_terminal(run_id):
+                    yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
+                    return
+                yield ": keepalive\n\n"
+                continue
+            if entry["id"] != 0 and entry["id"] <= last:
+                continue  # duplicate from the replay window
+            event = entry["event"]
+            if event.get("type") == "run_stream_end":
+                if not event.get("paused"):
+                    yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
+                    return
+                continue  # paused: stay subscribed for the resume pump
+            if entry["id"] != 0:
+                last = entry["id"]
+                yield f"id: {entry['id']}\ndata: {json.dumps(event, default=str)}\n\n"
+            else:
+                # Cap-skipped event (not journaled): deliver live but without an
+                # id line, so it can't regress the client's Last-Event-ID.
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+    finally:
+        broker.unsubscribe(run_id, queue)
+
+
+@router.get("/api/orchestrations/runs/{run_id}/events/stream")
+async def stream_run_events_sse(run_id: str, request: Request, after: int = 0):
+    """SSE: replay journaled events after `after` (or Last-Event-ID), then tail live.
+
+    This is the reattach stream — safe to open, close, and reopen at any point
+    in a run's life; pass the last seen event id to resume where you left off.
+    """
+    last_event_id = request.headers.get("last-event-id")
+    if last_event_id:
+        try:
+            after = int(last_event_id)
+        except ValueError:
+            pass
+
+    from core.orchestration.journal import FileRunJournal
+
+    if not FileRunJournal.exists(run_id) and run_id not in _active_tasks:
+        redis = getattr(request.app.state, "redis", None)
+        if redis is not None:
+            # V2/worker run: bridge the Redis Stream (its ids are Redis msg ids).
+            from core.scale.event_bridge import stream_run_events
+            return StreamingResponse(
+                stream_run_events(redis, run_id, last_event_id or "0"),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                    "Connection": "keep-alive",
+                },
+            )
+        if _run_summary(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+    return StreamingResponse(
+        _stream_journal_sse(run_id, after),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/api/orchestrations/{orch_id}")
@@ -197,6 +369,11 @@ async def resume_failed_run(run_id: str, request: Request):
     """Resume a failed or cancelled orchestration from where it stopped. Returns SSE stream."""
     server_module = request.app.state.server_module
 
+    # Two pumps for one run would interleave its journal and duplicate work.
+    active = _active_tasks.get(run_id)
+    if active is not None and not active.done():
+        raise HTTPException(status_code=409, detail="Run is already active")
+
     from core.orchestration.engine import OrchestrationEngine
 
     _task, queue = spawn_engine_run(
@@ -301,6 +478,11 @@ async def submit_human_input(run_id: str, request: Request):
             pass  # Fall through to in-process V1 path
 
     # --- V1 in-process path (unchanged) ---
+    # Two pumps for one run would interleave its journal and duplicate work.
+    active = _active_tasks.get(run_id)
+    if active is not None and not active.done():
+        raise HTTPException(status_code=409, detail="Run is already active")
+
     from core.orchestration.engine import OrchestrationEngine
 
     _task, queue = spawn_engine_run(
@@ -381,9 +563,11 @@ async def get_orchestration_log(run_id: str):
 
 @router.delete("/api/orchestrations/logs/{run_id}")
 async def delete_orchestration_log(run_id: str):
-    """Delete a specific orchestration log."""
+    """Delete a specific orchestration log (and its event journal)."""
     from core.orchestration.logger import OrchestrationLogger
-    if OrchestrationLogger.delete_log(run_id):
+    from core.orchestration.journal import FileRunJournal
+    deleted_journal = FileRunJournal.delete(run_id)
+    if OrchestrationLogger.delete_log(run_id) or deleted_journal:
         return {"status": "deleted", "run_id": run_id}
     raise HTTPException(status_code=404, detail="Log not found")
 

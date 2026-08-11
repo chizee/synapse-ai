@@ -799,13 +799,19 @@ async def clear_memory_items(req: MemoryClearRequest):
 
     # Orchestration run history
     if "orchestration_history" in items:
+        from core.orchestration.runner import _active_tasks
         count = 0
         for logs_dir in [
             Path(__file__).parent.parent.parent / "logs" / "orchestration_runs",
             Path(__file__).parent.parent.parent / "logs" / "orchestration_logs",
+            Path(__file__).parent.parent.parent / "logs" / "orchestration_events",
         ]:
             if logs_dir.is_dir():
                 for f in logs_dir.iterdir():
+                    # Never delete state of a run that is still executing —
+                    # it would corrupt its checkpoint/journal mid-write.
+                    if f.stem in _active_tasks:
+                        continue
                     if f.is_file():
                         try:
                             f.unlink()
