@@ -78,6 +78,14 @@ class OrchestrationEngine:
         )
         state = SharedState(run)
 
+        # Initial checkpoint: make the run visible to /runs listings and
+        # status polling from second zero. Without it the run file only
+        # appears at the first step boundary, so a run inside a long first
+        # step is invisible to the active-runs UI (and a crash there leaves
+        # no file to resume from). The startup zombie sweep handles these
+        # like any other interrupted "running" checkpoint.
+        state.checkpoint()
+
         self.logger = OrchestrationLogger(
             run_id=run_id,
             orchestration_id=self.orch.id,
