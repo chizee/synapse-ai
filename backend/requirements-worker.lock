@@ -83,11 +83,11 @@ beautifulsoup4==4.15.0
     #   -c requirements.lock
     #   -r requirements.txt
     #   crawl4ai
-boto3==1.43.67
+boto3==1.43.69
     # via
     #   -c requirements.lock
     #   -r requirements.txt
-botocore==1.43.67
+botocore==1.43.69
     # via
     #   -c requirements.lock
     #   boto3
@@ -250,7 +250,7 @@ googleapis-common-protos==1.75.1
     #   -c requirements.lock
     #   google-api-core
     #   opentelemetry-exporter-otlp-proto-grpc
-greenlet==3.5.4
+greenlet==3.5.5
     # via
     #   -c requirements.lock
     #   patchright
@@ -448,7 +448,7 @@ onnxruntime==1.28.0
     # via
     #   -c requirements.lock
     #   chromadb
-openai==2.53.0
+openai==2.54.0
     # via
     #   -c requirements.lock
     #   unclecode-litellm
@@ -790,7 +790,7 @@ soupsieve==2.9.2
     # via
     #   -c requirements.lock
     #   beautifulsoup4
-sqlalchemy==2.0.51
+sqlalchemy==2.0.52
     # via
     #   -c requirements.lock
     #   -r requirements-worker.txt
@@ -861,7 +861,7 @@ typing-extensions==4.16.0
     #   sqlalchemy
     #   starlette
     #   typing-inspection
-typing-inspection==0.4.2
+typing-inspection==0.4.3
     # via
     #   -c requirements.lock
     #   fastapi

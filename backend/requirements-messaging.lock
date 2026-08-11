@@ -146,7 +146,7 @@ slack-bolt==1.30.0
     # via -r requirements-messaging.txt
 slack-sdk==3.43.0
     # via slack-bolt
-twilio==9.10.9
+twilio==9.11.0
     # via -r requirements-messaging.txt
 typing-extensions==4.16.0
     # via
