@@ -596,6 +596,8 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                 // Terminal: completed / failed / cancelled
                 const final = data.status === 'completed' ? 'completed' : data.status === 'cancelled' ? 'cancelled' : 'failed';
                 setRunStatus(final);
+                setHumanPrompt(null);
+                setHumanContext(null);
                 setRunLog(prev => [...prev, `[Reconnected — run ${data.status}]`]);
                 return;
             }
@@ -684,6 +686,12 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                 break;
 
             case 'step_start': {
+                // Progress after a pause means the pending input was consumed
+                // (submitted here, in another tab, or via messaging) — drop the
+                // stale form. Matters for journal replay of resumed runs too.
+                setHumanPrompt(null);
+                setHumanContext(null);
+                setRunStatus('running');
                 setRunStepStatuses(prev => ({ ...prev, [data.orch_step_id]: 'running' }));
                 setRunLog(prev => [...prev, `▶ ${data.step_name} (${data.step_type})`]);
                 // Begin tracking response for agent/llm/print/extract_json steps, keyed by step id
@@ -827,6 +835,8 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
 
             case 'orchestration_complete':
                 setLiveActivity(null);
+                setHumanPrompt(null);
+                setHumanContext(null);
                 setRunStatus(data.status === 'completed' ? 'completed' : 'failed');
                 setRunLog(prev => [...prev, `Done — status: ${data.status}`]);
                 abortRef.current?.abort();
@@ -835,6 +845,8 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
 
             case 'orchestration_error':
                 setLiveActivity(null);
+                setHumanPrompt(null);
+                setHumanContext(null);
                 setRunStatus('failed');
                 setRunLog(prev => [...prev, `Error: ${data.error}`]);
                 abortRef.current?.abort();
@@ -1104,8 +1116,108 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             )}
 
             {!draft ? (
-                <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
-                    Select an orchestration or create a new one to get started.
+                /* ── Landing dashboard: runs + orchestration library ─────── */
+                <div className="flex-1 overflow-y-auto p-6 modern-scrollbar">
+                    <div className="max-w-4xl mx-auto space-y-8">
+                        {activeRuns.length > 0 && (
+                            <section>
+                                <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+                                    Active runs
+                                </h3>
+                                <div className="space-y-2">
+                                    {activeRuns.map(run => {
+                                        const orch = orchestrations.find(o => o.id === run.orchestration_id);
+                                        return (
+                                            <button
+                                                key={run.run_id}
+                                                onClick={() => restoreRun(run)}
+                                                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-colors text-left"
+                                            >
+                                                <span className={`w-2 h-2 rounded-full shrink-0 ${
+                                                    run.status === 'running' ? 'bg-blue-400 animate-pulse' : 'bg-yellow-400'
+                                                }`} />
+                                                <span className="flex-1 min-w-0">
+                                                    <span className="block text-sm text-zinc-200 truncate">
+                                                        {orch?.name ?? run.orchestration_id}
+                                                    </span>
+                                                    <span className="block text-[11px] text-zinc-500">
+                                                        {run.status === 'paused' ? '⏸ waiting for your input' : 'running'}
+                                                        {run.started_at ? ` · started ${new Date(run.started_at).toLocaleTimeString()}` : ''}
+                                                    </span>
+                                                </span>
+                                                <span className="text-[11px] text-zinc-500 shrink-0">
+                                                    View →
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+                        )}
+
+                        <section>
+                            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+                                Your orchestrations
+                            </h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {orchestrations.map(o => (
+                                    <button
+                                        key={o.id}
+                                        onClick={() => selectOrchestration(o.id)}
+                                        className="p-4 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-colors text-left"
+                                    >
+                                        <span className="block text-sm text-zinc-200 font-medium truncate">{o.name}</span>
+                                        <span className="block text-[11px] text-zinc-500 mt-1 line-clamp-2 min-h-[2em]">
+                                            {o.description || 'No description'}
+                                        </span>
+                                        <span className="block text-[10px] text-zinc-600 mt-2">
+                                            {o.steps.length} step{o.steps.length === 1 ? '' : 's'}
+                                        </span>
+                                    </button>
+                                ))}
+                                <button
+                                    onClick={createNew}
+                                    className="p-4 rounded-lg border border-dashed border-zinc-700 hover:border-zinc-500 text-zinc-500 hover:text-zinc-300 transition-colors text-sm flex items-center justify-center min-h-[92px]"
+                                >
+                                    + New orchestration
+                                </button>
+                            </div>
+                        </section>
+
+                        {pastRuns.filter(r => r.status !== 'running' && r.status !== 'paused').length > 0 && (
+                            <section>
+                                <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+                                    Recent runs
+                                </h3>
+                                <div className="space-y-1.5">
+                                    {pastRuns.filter(r => r.status !== 'running' && r.status !== 'paused').slice(0, 8).map(run => {
+                                        const orch = orchestrations.find(o => o.id === run.orchestration_id);
+                                        return (
+                                            <button
+                                                key={run.run_id}
+                                                onClick={() => restoreRun(run)}
+                                                className="w-full flex items-center gap-3 px-3 py-2 rounded bg-zinc-900/50 border border-zinc-800/50 hover:border-zinc-700 transition-colors text-left"
+                                            >
+                                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                                    run.status === 'completed' ? 'bg-green-500' :
+                                                    run.status === 'cancelled' ? 'bg-zinc-500' : 'bg-red-500'
+                                                }`} />
+                                                <span className="flex-1 min-w-0 text-xs text-zinc-300 truncate">
+                                                    {orch?.name ?? run.orchestration_id}
+                                                </span>
+                                                <span className="text-[10px] text-zinc-600 shrink-0">{run.status}</span>
+                                                {run.started_at && (
+                                                    <span className="text-[10px] text-zinc-600 shrink-0">
+                                                        {new Date(run.started_at).toLocaleString()}
+                                                    </span>
+                                                )}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+                        )}
+                    </div>
                 </div>
             ) : (
                 <div className="flex-1 flex flex-col min-h-0">
