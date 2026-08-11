@@ -689,7 +689,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                             try {
                                 const data = JSON.parse(line.slice(6));
                                 if (data.type === 'stream_complete') return true;  // run truly over
-                                handleSSEEvent(data);
+                                handleSSEEvent(data, true);
                             } catch { /* ignore parse errors */ }
                         }
                     }
@@ -860,7 +860,12 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
         streamSSE(`/api/orchestrations/${draft.id}/run`, { message: runInput });
     };
 
-    const handleSSEEvent = (data: any) => {
+    // `fromJournal` marks events arriving from the replay/tail stream. A
+    // journal can contain a terminal event mid-file (cancel, then resume
+    // appends more events to the same run), so terminal handlers must NOT
+    // abort the feed there — the server signals the real end with
+    // `stream_complete`. Aborting on the live POST stream stays correct.
+    const handleSSEEvent = (data: any, fromJournal = false) => {
         switch (data.type) {
             case 'orchestration_start':
                 setRunId(data.run_id);
@@ -1021,8 +1026,10 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                 setHumanContext(null);
                 setRunStatus(data.status === 'completed' ? 'completed' : 'failed');
                 setRunLog(prev => [...prev, `Done — status: ${data.status}`]);
-                abortRef.current?.abort();
-                abortRef.current = null;
+                if (!fromJournal) {
+                    abortRef.current?.abort();
+                    abortRef.current = null;
+                }
                 break;
 
             case 'orchestration_error':
@@ -1031,8 +1038,10 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                 setHumanContext(null);
                 setRunStatus('failed');
                 setRunLog(prev => [...prev, `Error: ${data.error}`]);
-                abortRef.current?.abort();
-                abortRef.current = null;
+                if (!fromJournal) {
+                    abortRef.current?.abort();
+                    abortRef.current = null;
+                }
                 break;
 
             case 'tool_execution':
