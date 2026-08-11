@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Save, Play, Trash, Square, Loader2, Copy, Check, Radio, Bot, Scale, GitBranch, GitMerge, RefreshCw, User, Code, Zap, Wrench, ExternalLink, X, Sparkles, Braces, GitFork, ArrowLeftRight, FileText } from 'lucide-react';
+import { Plus, Save, Play, Trash, Square, Loader2, Copy, Check, Radio, Bot, Scale, GitBranch, GitMerge, RefreshCw, User, Code, Zap, Wrench, ExternalLink, X, Sparkles, Braces, GitFork, ArrowLeftRight, FileText, ArrowLeft } from 'lucide-react';
 import { BuilderPanel } from '../orchestration/BuilderPanel';
 import { STEP_TYPE_META } from '@/types/orchestration';
 import { readWithStallTimeout } from '@/lib/sse';
@@ -134,11 +134,13 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
         last_step_name?: string | null;
         waiting_for_human?: boolean;
         total_cost_usd?: number | null;
+        session_id?: string | null;
     };
     const [activeRuns, setActiveRuns] = useState<RunSummary[]>([]);
     const activeRunsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [pastRuns, setPastRuns] = useState<RunSummary[]>([]);
     // Landing dashboard: which table is shown when no orchestration is open.
+    const [schedules, setSchedules] = useState<Array<{ id: string; name: string }>>([]);
     const [landingTab, setLandingTab] = useState<'orchestrations' | 'active' | 'recent' | 'all'>('orchestrations');
     const [allRuns, setAllRuns] = useState<RunSummary[]>([]);
     const autoTabRef = useRef(false);
@@ -155,6 +157,11 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
 
         fetch('/api/models').then(r => r.json()).then(data => {
             setAvailableModels(data.all_available || []);
+        }).catch(() => {});
+
+        // Schedule names, for labelling schedule-triggered runs.
+        fetch('/api/schedules').then(r => r.json()).then(data => {
+            setSchedules(Array.isArray(data) ? data : []);
         }).catch(() => {});
     }, []);
 
@@ -211,6 +218,20 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             : null;
         return byId || run.last_step_name || null;
     };
+    // What kicked this run off. Derived from session_id, which the scheduler
+    // sets to `schedule_<schedule_id>` and the orchestrator-agent path sets to
+    // the chat session id; manual UI and API runs carry none.
+    const triggerOf = (run: RunSummary): string => {
+        const session = run.session_id || '';
+        if (session.startsWith('schedule_')) {
+            const schedId = session.slice('schedule_'.length);
+            const sched = schedules.find(s => s.id === schedId);
+            return sched ? `Schedule · ${sched.name}` : 'Schedule';
+        }
+        if (session) return 'Agent chat';
+        return 'Manual';
+    };
+
     const fmtDuration = (start?: string | null, end?: string | null): string => {
         if (!start) return '—';
         const s = new Date(start).getTime();
@@ -245,6 +266,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                             <th className={thCls}>Status</th>
                             <th className={thCls}>Orchestration</th>
                             <th className={thCls}>Step</th>
+                            <th className={thCls}>Trigger</th>
                             <th className={`${thCls} text-right`}>Progress</th>
                             <th className={`${thCls} text-right`}>Cost</th>
                             <th className={`${thCls} text-right`}>Started</th>
@@ -255,7 +277,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                     <tbody>
                         {rows.length === 0 ? (
                             <tr>
-                                <td colSpan={8} className="px-4 py-10 text-center text-xs text-zinc-600 italic">
+                                <td colSpan={9} className="px-4 py-10 text-center text-xs text-zinc-600 italic">
                                     {empty}
                                 </td>
                             </tr>
@@ -285,6 +307,9 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                                                 {run.status === 'running' ? '▶ ' : run.status === 'paused' ? '⏸ ' : ''}{stepName}
                                             </span>
                                         ) : <span className="text-zinc-600">—</span>}
+                                    </td>
+                                    <td className={`${tdCls} text-zinc-500 max-w-[160px]`}>
+                                        <span className="block truncate">{triggerOf(run)}</span>
                                     </td>
                                     <td className={`${tdCls} text-right text-zinc-400 whitespace-nowrap`}>
                                         {run.steps_completed ?? 0} step{(run.steps_completed ?? 0) === 1 ? '' : 's'}
@@ -319,9 +344,17 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
     // and keep tailing live events until the run ends.
     const restoreRun = useCallback(async (runInfo: { run_id: string; orchestration_id: string; status: string }) => {
         const orch = orchestrations.find(o => o.id === runInfo.orchestration_id);
+        if (!orch) {
+            // No definition to render the canvas from — bail loudly rather than
+            // setting draft to null, which would silently re-render the landing
+            // page and look like the click did nothing. The runs API filters
+            // these out, so this is a backstop (e.g. deleted mid-session).
+            showToast('That run\'s orchestration no longer exists', 'error');
+            return;
+        }
         setSelectedOrchId(runInfo.orchestration_id);
         setSelectedStepId(null);
-        setDraft(orch ? { ...orch } : null);
+        setDraft({ ...orch });
         setRunId(runInfo.run_id);
         // Sync the ref synchronously — the useEffect that mirrors runId only runs
         // after render, but streamRunJournal's guard reads currentRunIdRef immediately.
@@ -332,11 +365,9 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
 
         // Baseline: mark all steps pending (like a fresh run) before overlaying
         // completed/failed from the checkpoint.
-        if (orch) {
-            const seeded: Record<string, RunStepStatus> = {};
-            orch.steps.forEach(s => { seeded[s.id] = 'pending'; });
-            setRunStepStatuses(seeded);
-        }
+        const seeded: Record<string, RunStepStatus> = {};
+        orch.steps.forEach(s => { seeded[s.id] = 'pending'; });
+        setRunStepStatuses(seeded);
 
         // Restore step statuses + human-input state from the persisted checkpoint
         // so the canvas is meaningful before (and in case of a pre-journal run,
@@ -384,6 +415,19 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             setDraft(null);
         }
     }, [orchestrations]);
+
+    // --- Back to the landing dashboard ---
+    // Detaches this browser from the run's event stream; the run itself keeps
+    // executing server-side on the runner pump and stays listed under Active,
+    // so leaving the view never interrupts work.
+    const backToList = useCallback(() => {
+        abortRef.current?.abort();
+        abortRef.current = null;
+        currentRunIdRef.current = null;  // stops streamRunJournal's tail loop
+        setRunId(null);
+        setLiveActivity(null);
+        selectOrchestration(null);
+    }, [selectOrchestration]);
 
     // --- Create new orchestration ---
     const createNew = () => {
@@ -1150,6 +1194,15 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             {/* Toolbar: orchestration picker + actions */}
             <div className="flex items-center gap-3 px-4 py-2.5 border-b border-zinc-800 shrink-0">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
+                    {draft && (
+                        <button
+                            onClick={backToList}
+                            title="Back to all orchestrations and runs"
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-zinc-400 hover:text-white border border-zinc-700 hover:border-white transition-colors shrink-0"
+                        >
+                            <ArrowLeft size={14} /> Back
+                        </button>
+                    )}
                     <select
                         className="bg-zinc-900 border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 outline-none max-w-[240px]"
                         value={selectedOrchId || ''}
@@ -1258,7 +1311,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                 <div className="flex-1 overflow-y-auto modern-scrollbar">
                     <div className="px-4 pb-8">
                         {/* Tab bar */}
-                        <div className="flex items-end justify-between border-b border-white/5 mb-4">
+                        <div className="flex items-end border-b border-white/5 mb-4">
                             <div className="flex items-center">
                                 {([
                                     { id: 'orchestrations', label: 'Orchestrations', count: orchestrations.length },
@@ -1286,14 +1339,6 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                                     </button>
                                 ))}
                             </div>
-                            {landingTab === 'orchestrations' && (
-                                <button
-                                    onClick={createNew}
-                                    className="mb-1.5 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-white border border-zinc-700 hover:border-white transition-colors"
-                                >
-                                    + New orchestration
-                                </button>
-                            )}
                         </div>
 
                         {landingTab === 'orchestrations' && (
