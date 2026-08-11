@@ -93,6 +93,23 @@ def _isolate_run_journals(tmp_path, monkeypatch):
         journal_mod.close_journal(run_id)
 
 
+# ── run checkpoint isolation (autouse) ───────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _isolate_run_checkpoints(tmp_path, monkeypatch):
+    """Point run checkpoints at a per-test temp dir.
+
+    RUNS_DIR is derived from ``__file__`` (backend/logs/orchestration_runs), not
+    from DATA_DIR, so SYNAPSE_DATA_DIR does not relocate it. Without this, every
+    test that runs the engine writes a checkpoint into the user's real run
+    history — which then shows up in the runs UI as an unopenable row.
+
+    Tests that patch RUNS_DIR themselves still work: their patch is applied
+    after this one and both unwind at teardown.
+    """
+    import core.orchestration.state as state_mod
+    monkeypatch.setattr(state_mod, "RUNS_DIR", tmp_path / "orchestration_runs")
+
+
 # ── fake LLM (autouse) ───────────────────────────────────────────────────────
 @pytest.fixture(autouse=True)
 def fake_llm(monkeypatch):
