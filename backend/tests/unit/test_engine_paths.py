@@ -140,3 +140,41 @@ class TestInitialCheckpoint:
             pass
         ckpt = _json.loads((tmp_path / "runs" / "run_early.json").read_text(encoding="utf-8"))
         assert ckpt["status"] == "completed"
+
+
+class TestRunSummaryFields:
+    async def test_list_runs_exposes_live_progress(self, tmp_path, monkeypatch):
+        """The runs table needs current step / progress / waiting state, not
+        just status + timestamps."""
+        import core.orchestration.state as state_mod
+        from core.models_orchestration import OrchestrationRun
+
+        monkeypatch.setattr(state_mod, "RUNS_DIR", tmp_path / "runs")
+        run = OrchestrationRun(
+            run_id="run_sum", orchestration_id="o1", status="paused",
+            current_step_id="s2", waiting_for_human=True, total_cost_usd=0.0125,
+            step_history=[{"step_id": "s1", "step_name": "Fetch", "status": "completed"}],
+        )
+        state_mod.SharedState(run).checkpoint()
+
+        [summary] = state_mod.SharedState.list_runs()
+        assert summary["current_step_id"] == "s2"
+        assert summary["steps_completed"] == 1
+        assert summary["last_step_name"] == "Fetch"
+        assert summary["waiting_for_human"] is True
+        assert summary["total_cost_usd"] == 0.0125
+
+    async def test_list_runs_limit_is_clamped(self, client, tmp_path, monkeypatch):
+        import core.orchestration.state as state_mod
+        from core.models_orchestration import OrchestrationRun
+
+        monkeypatch.setattr(state_mod, "RUNS_DIR", tmp_path / "runs")
+        for n in range(3):
+            state_mod.SharedState(
+                OrchestrationRun(run_id=f"run_{n}", orchestration_id="o1", status="completed")
+            ).checkpoint()
+
+        assert len((await client.get("/api/orchestrations/runs?limit=2")).json()) == 2
+        # Out-of-range values clamp instead of erroring.
+        assert len((await client.get("/api/orchestrations/runs?limit=0")).json()) == 1
+        assert len((await client.get("/api/orchestrations/runs?limit=9999")).json()) == 3

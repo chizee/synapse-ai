@@ -38,10 +38,10 @@ async def list_orchestrations():
 
 
 @router.get("/api/orchestrations/runs")
-async def list_runs():
-    """List recent orchestration runs."""
+async def list_runs(limit: int = 20):
+    """List recent orchestration runs (newest first)."""
     from core.orchestration.state import SharedState
-    return SharedState.list_runs()
+    return SharedState.list_runs(limit=max(1, min(limit, 200)))
 
 
 def _run_summary(run_id: str) -> dict | None:
