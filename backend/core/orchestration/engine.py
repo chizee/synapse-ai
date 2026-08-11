@@ -410,6 +410,11 @@ class OrchestrationEngine:
         run.status = "running"
 
         state = SharedState(run)
+        # Persist "running" before the first step so the run reappears in the
+        # active-runs listing immediately. Without this the checkpoint still
+        # reads failed/cancelled until the first step boundary, and a resumed
+        # run looks dead for as long as its first step takes.
+        state.checkpoint()
         async for event in engine._execute_loop(run, state):
             yield event
 
@@ -481,6 +486,9 @@ class OrchestrationEngine:
 
         print(f"[engine.resume] 🚀 entering _execute_loop with current_step_id={run.current_step_id!r} status={run.status}", flush=True)
         state = SharedState(run)
+        # Persist "running" + the cleared human flag before the first step, so
+        # the run stops showing as "needs input" the moment it resumes.
+        state.checkpoint()
         async for event in engine._execute_loop(run, state):
             yield event
         print(f"[engine.resume] 🏁 _execute_loop finished, run.status={run.status} run.current_step_id={run.current_step_id!r}", flush=True)
@@ -596,6 +604,8 @@ class OrchestrationEngine:
             run.current_step_id = next_id
 
         state = SharedState(run)
+        # Same as resume(): make the un-paused state visible before step one.
+        state.checkpoint()
         async for event in engine._execute_loop(run, state):
             yield event
 
