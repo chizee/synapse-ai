@@ -233,15 +233,15 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
         }
     };
 
-    const thCls = 'px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 whitespace-nowrap';
-    const tdCls = 'px-4 py-3 text-xs';
+    const thCls = 'px-4 py-2 text-[10px] font-medium uppercase tracking-wider text-zinc-500 whitespace-nowrap';
+    const tdCls = 'px-4 py-2.5 text-xs';
 
     const renderRunsTable = (rows: RunSummary[], empty: string) => (
-        <div className="border border-zinc-800 rounded-lg overflow-hidden bg-zinc-950/60">
+        <div className="border border-white/5 bg-zinc-900/60">
             <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                     <thead>
-                        <tr className="border-b border-zinc-800 bg-zinc-900/40">
+                        <tr className="border-b border-white/5 bg-zinc-950/40">
                             <th className={thCls}>Status</th>
                             <th className={thCls}>Orchestration</th>
                             <th className={thCls}>Step</th>
@@ -267,7 +267,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                                 <tr
                                     key={run.run_id}
                                     onClick={() => restoreRun(run)}
-                                    className="border-b border-zinc-800/60 last:border-b-0 hover:bg-zinc-900/70 cursor-pointer transition-colors group"
+                                    className="border-b border-white/3 last:border-b-0 hover:bg-white/2 cursor-pointer transition-colors group"
                                 >
                                     <td className={`${tdCls} whitespace-nowrap`}>
                                         <span className="inline-flex items-center gap-2">
@@ -1151,7 +1151,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             <div className="flex items-center gap-3 px-4 py-2.5 border-b border-zinc-800 shrink-0">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                     <select
-                        className="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 outline-none max-w-[240px]"
+                        className="bg-zinc-900 border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 outline-none max-w-[240px]"
                         value={selectedOrchId || ''}
                         onChange={(e) => selectOrchestration(e.target.value || null)}
                     >
@@ -1162,7 +1162,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                     </select>
                     <button
                         onClick={createNew}
-                        className="flex items-center gap-1 px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                        className="flex items-center gap-1 px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white transition-colors"
                     >
                         <Plus size={14} /> New
                     </button>
@@ -1172,7 +1172,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                             setBuilderOpen(true); 
                             setBuilderSessionKey(k => k + 1); 
                         }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-500 text-white transition-colors"
                     >
                         <Sparkles size={13} /> Build with AI
                     </button>
@@ -1183,42 +1183,42 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                         <button
                             onClick={handleSave}
                             disabled={saving}
-                            className="flex items-center gap-1 px-3 py-1.5 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded transition-colors disabled:opacity-50"
+                            className="flex items-center gap-1 px-3 py-1.5 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200 transition-colors disabled:opacity-50"
                         >
                             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
                         </button>
                         {runStatus === 'idle' || runStatus === 'completed' || runStatus === 'failed' || runStatus === 'cancelled' ? (
                             <button
                                 onClick={startRun}
-                                className="flex items-center gap-1 px-3 py-1.5 text-xs bg-green-600 hover:bg-green-500 text-white rounded transition-colors"
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs bg-green-600 hover:bg-green-500 text-white transition-colors"
                             >
                                 <Play size={14} /> Run
                             </button>
                         ) : (
                             <button
                                 onClick={cancelRun}
-                                className="flex items-center gap-1 px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 text-white rounded transition-colors"
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 text-white transition-colors"
                             >
                                 <Square size={14} /> Cancel
                             </button>
                         )}
                         <button
                             onClick={handleDeploy}
-                            className="px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-500 text-white rounded transition-colors"
+                            className="px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-500 text-white transition-colors"
                         >
                             Deploy as Agent
                         </button>
                         <button
                             onClick={handleDuplicate}
                             disabled={saving}
-                            className="flex items-center gap-1 px-3 py-1.5 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded transition-colors disabled:opacity-50"
+                            className="flex items-center gap-1 px-3 py-1.5 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200 transition-colors disabled:opacity-50"
                         >
                             <Copy size={13} /> Duplicate
                         </button>
                         <div className="w-px h-5 bg-zinc-700 mx-1" />
                         <button
                             onClick={handleDelete}
-                            className="flex items-center gap-1 px-2 py-1.5 text-xs text-zinc-500 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors"
+                            className="flex items-center gap-1 px-2 py-1.5 text-xs text-zinc-500 hover:text-red-400 hover:bg-red-900/20 transition-colors"
                         >
                             <Trash size={13} /> Delete
                         </button>
@@ -1239,7 +1239,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                                 <button
                                     key={run.run_id}
                                     onClick={() => restoreRun(run)}
-                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 transition-colors"
+                                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 transition-colors"
                                 >
                                     <span className={`w-1.5 h-1.5 rounded-full ${
                                         run.status === 'running' ? 'bg-blue-400 animate-pulse' : 'bg-yellow-400'
@@ -1256,10 +1256,10 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             {!draft ? (
                 /* ── Landing dashboard: tabbed tables ────────────────────── */
                 <div className="flex-1 overflow-y-auto modern-scrollbar">
-                    <div className="max-w-5xl mx-auto px-6 pb-10">
+                    <div className="px-4 pb-8">
                         {/* Tab bar */}
-                        <div className="flex items-end justify-between border-b border-zinc-800 mt-4 mb-5">
-                            <div className="flex items-center gap-1">
+                        <div className="flex items-end justify-between border-b border-white/5 mb-4">
+                            <div className="flex items-center">
                                 {([
                                     { id: 'orchestrations', label: 'Orchestrations', count: orchestrations.length },
                                     { id: 'active', label: 'Active', count: activeRuns.length },
@@ -1269,18 +1269,18 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                                     <button
                                         key={t.id}
                                         onClick={() => setLandingTab(t.id)}
-                                        className={`px-4 py-2.5 text-xs font-medium border-b-2 -mb-px transition-colors ${
+                                        className={`px-4 py-2.5 text-xs font-medium border-b -mb-px transition-colors ${
                                             landingTab === t.id
-                                                ? 'text-zinc-100 border-blue-500'
+                                                ? 'text-zinc-100 border-zinc-100'
                                                 : 'text-zinc-500 border-transparent hover:text-zinc-300'
                                         }`}
                                     >
                                         {t.label}
                                         {t.count !== null && t.count > 0 && (
-                                            <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] ${
+                                            <span className={`ml-1.5 px-1.5 py-0.5 text-[10px] ${
                                                 t.id === 'active'
                                                     ? 'bg-blue-500/20 text-blue-300'
-                                                    : 'bg-zinc-800 text-zinc-400'
+                                                    : 'bg-white/5 text-zinc-400'
                                             }`}>{t.count}</span>
                                         )}
                                     </button>
@@ -1289,7 +1289,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                             {landingTab === 'orchestrations' && (
                                 <button
                                     onClick={createNew}
-                                    className="mb-2 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:border-zinc-500 rounded transition-colors"
+                                    className="mb-1.5 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-white border border-zinc-700 hover:border-white transition-colors"
                                 >
                                     + New orchestration
                                 </button>
@@ -1297,11 +1297,11 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                         </div>
 
                         {landingTab === 'orchestrations' && (
-                            <div className="border border-zinc-800 rounded-lg overflow-hidden bg-zinc-950/60">
+                            <div className="border border-white/5 bg-zinc-900/60">
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-left border-collapse">
                                         <thead>
-                                            <tr className="border-b border-zinc-800 bg-zinc-900/40">
+                                            <tr className="border-b border-white/5 bg-zinc-950/40">
                                                 <th className={thCls}>Name</th>
                                                 <th className={thCls}>Description</th>
                                                 <th className={`${thCls} text-right`}>Steps</th>
@@ -1323,7 +1323,7 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
                                                     <tr
                                                         key={o.id}
                                                         onClick={() => selectOrchestration(o.id)}
-                                                        className="border-b border-zinc-800/60 last:border-b-0 hover:bg-zinc-900/70 cursor-pointer transition-colors group"
+                                                        className="border-b border-white/3 last:border-b-0 hover:bg-white/2 cursor-pointer transition-colors group"
                                                     >
                                                         <td className={`${tdCls} text-zinc-200 font-medium whitespace-nowrap max-w-[240px]`}>
                                                             <span className="block truncate">{o.name}</span>
