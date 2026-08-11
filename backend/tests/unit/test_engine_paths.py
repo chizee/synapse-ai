@@ -140,3 +140,73 @@ class TestInitialCheckpoint:
             pass
         ckpt = _json.loads((tmp_path / "runs" / "run_early.json").read_text(encoding="utf-8"))
         assert ckpt["status"] == "completed"
+
+
+class TestResumeVisibility:
+    """A resumed run must read as 'running' on disk immediately, not only
+    after its first step boundary — otherwise the active-runs list keeps
+    showing it as failed/cancelled/needs-input while it is actually working."""
+
+    def _orch(self):
+        return S.make_orchestration(
+            id="orch_resume_vis",
+            entry_step_id="p",
+            steps=[{"id": "p", "name": "P", "type": "print", "print_content": "x",
+                    "output_key": "o", "next_step_id": None}],
+        )
+
+    async def test_resume_failed_marks_running_before_first_step(
+        self, tmp_path, monkeypatch, seed_orchestration
+    ):
+        import json as _json
+        import core.orchestration.state as state_mod
+        from core.models_orchestration import OrchestrationRun
+        from core.orchestration.engine import OrchestrationEngine
+
+        monkeypatch.setattr(state_mod, "RUNS_DIR", tmp_path / "runs")
+        orch = self._orch()
+        seed_orchestration(**orch)
+        state_mod.SharedState(OrchestrationRun(
+            run_id="run_res", orchestration_id=orch["id"], status="cancelled",
+            current_step_id="p",
+        )).checkpoint()
+
+        agen = OrchestrationEngine.resume_failed("run_res", _server())
+        await agen.__anext__()  # first event — no step has finished yet
+        ckpt = _json.loads((tmp_path / "runs" / "run_res.json").read_text(encoding="utf-8"))
+        assert ckpt["status"] == "running"
+        async for _ in agen:
+            pass
+
+    async def test_resume_human_clears_waiting_before_first_step(
+        self, tmp_path, monkeypatch, seed_orchestration
+    ):
+        import json as _json
+        import core.orchestration.state as state_mod
+        from core.models_orchestration import OrchestrationRun
+        from core.orchestration.engine import OrchestrationEngine
+
+        monkeypatch.setattr(state_mod, "RUNS_DIR", tmp_path / "runs")
+        orch = S.make_orchestration(
+            id="orch_resume_human",
+            entry_step_id="h",
+            steps=[
+                {"id": "h", "name": "Ask", "type": "human", "human_prompt": "?",
+                 "output_key": "answer", "next_step_id": "p"},
+                {"id": "p", "name": "P", "type": "print", "print_content": "x",
+                 "output_key": "o", "next_step_id": None},
+            ],
+        )
+        seed_orchestration(**orch)
+        state_mod.SharedState(OrchestrationRun(
+            run_id="run_hum", orchestration_id=orch["id"], status="paused",
+            current_step_id="h", waiting_for_human=True, human_prompt="?",
+        )).checkpoint()
+
+        agen = OrchestrationEngine.resume("run_hum", {"answer": "yes"}, _server())
+        await agen.__anext__()
+        ckpt = _json.loads((tmp_path / "runs" / "run_hum.json").read_text(encoding="utf-8"))
+        assert ckpt["status"] == "running"
+        assert ckpt["waiting_for_human"] is False
+        async for _ in agen:
+            pass
