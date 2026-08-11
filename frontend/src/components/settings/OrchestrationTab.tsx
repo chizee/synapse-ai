@@ -123,20 +123,25 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
     const [builderSessionKey, setBuilderSessionKey] = useState(0);
 
     // --- Active runs (for reconnect banner) ---
-    const [activeRuns, setActiveRuns] = useState<Array<{
+    type RunSummary = {
         run_id: string;
         orchestration_id: string;
         status: string;
-        started_at: string | null;
-    }>>([]);
+        started_at?: string | null;
+        ended_at?: string | null;
+        current_step_id?: string | null;
+        steps_completed?: number;
+        last_step_name?: string | null;
+        waiting_for_human?: boolean;
+        total_cost_usd?: number | null;
+    };
+    const [activeRuns, setActiveRuns] = useState<RunSummary[]>([]);
     const activeRunsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const [pastRuns, setPastRuns] = useState<Array<{
-        run_id: string;
-        orchestration_id: string;
-        status: string;
-        started_at?: string;
-        ended_at?: string;
-    }>>([]);
+    const [pastRuns, setPastRuns] = useState<RunSummary[]>([]);
+    // Landing dashboard: which table is shown when no orchestration is open.
+    const [landingTab, setLandingTab] = useState<'orchestrations' | 'active' | 'recent' | 'all'>('orchestrations');
+    const [allRuns, setAllRuns] = useState<RunSummary[]>([]);
+    const autoTabRef = useRef(false);
 
     // --- Fetch orchestrations + agents ---
     useEffect(() => {
@@ -173,6 +178,139 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             if (activeRunsPollRef.current) clearInterval(activeRunsPollRef.current);
         };
     }, [fetchActiveRuns]);
+
+    // Land on the Active table when something is running/paused (once).
+    useEffect(() => {
+        if (!autoTabRef.current && activeRuns.length > 0) {
+            autoTabRef.current = true;
+            setLandingTab('active');
+        }
+    }, [activeRuns]);
+
+    // The All-runs table is heavier (up to 100 checkpoints) — fetch it only
+    // while that tab is open, on a slower cadence than the active poll.
+    useEffect(() => {
+        if (landingTab !== 'all') return;
+        const fetchAll = () => {
+            fetch('/api/orchestrations/runs?limit=100')
+                .then(r => r.json())
+                .then(d => { if (Array.isArray(d)) setAllRuns(d); })
+                .catch(() => {});
+        };
+        fetchAll();
+        const interval = setInterval(fetchAll, 10000);
+        return () => clearInterval(interval);
+    }, [landingTab]);
+
+    // --- Landing-table helpers ---
+    const orchNameOf = (id: string) => orchestrations.find(o => o.id === id)?.name ?? id;
+    const currentStepNameOf = (run: RunSummary): string | null => {
+        const orch = orchestrations.find(o => o.id === run.orchestration_id);
+        const byId = run.current_step_id
+            ? orch?.steps.find(s => s.id === run.current_step_id)?.name
+            : null;
+        return byId || run.last_step_name || null;
+    };
+    const fmtDuration = (start?: string | null, end?: string | null): string => {
+        if (!start) return '—';
+        const s = new Date(start).getTime();
+        const e = end ? new Date(end).getTime() : Date.now();
+        const sec = Math.max(0, Math.round((e - s) / 1000));
+        if (sec < 60) return `${sec}s`;
+        const m = Math.floor(sec / 60);
+        if (m < 60) return `${m}m ${sec % 60}s`;
+        return `${Math.floor(m / 60)}h ${m % 60}m`;
+    };
+    const runStatusMeta = (run: RunSummary): { dot: string; label: string; text: string } => {
+        switch (run.status) {
+            case 'running': return { dot: 'bg-blue-400 animate-pulse', label: 'Running', text: 'text-blue-300' };
+            case 'paused': return run.waiting_for_human
+                ? { dot: 'bg-yellow-400', label: 'Needs input', text: 'text-yellow-300' }
+                : { dot: 'bg-yellow-400', label: 'Paused', text: 'text-yellow-300' };
+            case 'completed': return { dot: 'bg-green-500', label: 'Completed', text: 'text-zinc-400' };
+            case 'cancelled': return { dot: 'bg-zinc-500', label: 'Cancelled', text: 'text-zinc-500' };
+            default: return { dot: 'bg-red-500', label: 'Failed', text: 'text-red-300' };
+        }
+    };
+
+    const thCls = 'px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 whitespace-nowrap';
+    const tdCls = 'px-4 py-3 text-xs';
+
+    const renderRunsTable = (rows: RunSummary[], empty: string) => (
+        <div className="border border-zinc-800 rounded-lg overflow-hidden bg-zinc-950/60">
+            <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                    <thead>
+                        <tr className="border-b border-zinc-800 bg-zinc-900/40">
+                            <th className={thCls}>Status</th>
+                            <th className={thCls}>Orchestration</th>
+                            <th className={thCls}>Step</th>
+                            <th className={`${thCls} text-right`}>Progress</th>
+                            <th className={`${thCls} text-right`}>Cost</th>
+                            <th className={`${thCls} text-right`}>Started</th>
+                            <th className={`${thCls} text-right`}>Duration</th>
+                            <th className={thCls}></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.length === 0 ? (
+                            <tr>
+                                <td colSpan={8} className="px-4 py-10 text-center text-xs text-zinc-600 italic">
+                                    {empty}
+                                </td>
+                            </tr>
+                        ) : rows.map(run => {
+                            const meta = runStatusMeta(run);
+                            const stepName = currentStepNameOf(run);
+                            const isLive = run.status === 'running' || run.status === 'paused';
+                            return (
+                                <tr
+                                    key={run.run_id}
+                                    onClick={() => restoreRun(run)}
+                                    className="border-b border-zinc-800/60 last:border-b-0 hover:bg-zinc-900/70 cursor-pointer transition-colors group"
+                                >
+                                    <td className={`${tdCls} whitespace-nowrap`}>
+                                        <span className="inline-flex items-center gap-2">
+                                            <span className={`w-2 h-2 rounded-full shrink-0 ${meta.dot}`} />
+                                            <span className={meta.text}>{meta.label}</span>
+                                        </span>
+                                    </td>
+                                    <td className={`${tdCls} text-zinc-200 max-w-[220px]`}>
+                                        <span className="block truncate">{orchNameOf(run.orchestration_id)}</span>
+                                        <span className="block text-[10px] text-zinc-600 truncate">{run.run_id}</span>
+                                    </td>
+                                    <td className={`${tdCls} max-w-[200px]`}>
+                                        {stepName ? (
+                                            <span className={`block truncate ${isLive ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                                                {run.status === 'running' ? '▶ ' : run.status === 'paused' ? '⏸ ' : ''}{stepName}
+                                            </span>
+                                        ) : <span className="text-zinc-600">—</span>}
+                                    </td>
+                                    <td className={`${tdCls} text-right text-zinc-400 whitespace-nowrap`}>
+                                        {run.steps_completed ?? 0} step{(run.steps_completed ?? 0) === 1 ? '' : 's'}
+                                    </td>
+                                    <td className={`${tdCls} text-right text-zinc-500 whitespace-nowrap`}>
+                                        {run.total_cost_usd ? `$${run.total_cost_usd.toFixed(4)}` : '—'}
+                                    </td>
+                                    <td className={`${tdCls} text-right text-zinc-500 whitespace-nowrap`}>
+                                        {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
+                                    </td>
+                                    <td className={`${tdCls} text-right text-zinc-500 whitespace-nowrap`}>
+                                        {fmtDuration(run.started_at, run.ended_at)}
+                                    </td>
+                                    <td className={`${tdCls} text-right whitespace-nowrap`}>
+                                        <span className="text-[11px] text-zinc-600 group-hover:text-zinc-300 transition-colors">
+                                            View →
+                                        </span>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
 
     // --- Restore a run from the active runs banner / recent runs / deep link ---
     // The run's event journal is replayable, so restoring = hydrate step
@@ -1116,106 +1254,123 @@ export function OrchestrationTab({ initialRunId }: { initialRunId?: string } = {
             )}
 
             {!draft ? (
-                /* ── Landing dashboard: runs + orchestration library ─────── */
-                <div className="flex-1 overflow-y-auto p-6 modern-scrollbar">
-                    <div className="max-w-4xl mx-auto space-y-8">
-                        {activeRuns.length > 0 && (
-                            <section>
-                                <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
-                                    Active runs
-                                </h3>
-                                <div className="space-y-2">
-                                    {activeRuns.map(run => {
-                                        const orch = orchestrations.find(o => o.id === run.orchestration_id);
-                                        return (
-                                            <button
-                                                key={run.run_id}
-                                                onClick={() => restoreRun(run)}
-                                                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-colors text-left"
-                                            >
-                                                <span className={`w-2 h-2 rounded-full shrink-0 ${
-                                                    run.status === 'running' ? 'bg-blue-400 animate-pulse' : 'bg-yellow-400'
-                                                }`} />
-                                                <span className="flex-1 min-w-0">
-                                                    <span className="block text-sm text-zinc-200 truncate">
-                                                        {orch?.name ?? run.orchestration_id}
-                                                    </span>
-                                                    <span className="block text-[11px] text-zinc-500">
-                                                        {run.status === 'paused' ? '⏸ waiting for your input' : 'running'}
-                                                        {run.started_at ? ` · started ${new Date(run.started_at).toLocaleTimeString()}` : ''}
-                                                    </span>
-                                                </span>
-                                                <span className="text-[11px] text-zinc-500 shrink-0">
-                                                    View →
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </section>
-                        )}
-
-                        <section>
-                            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
-                                Your orchestrations
-                            </h3>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                {orchestrations.map(o => (
+                /* ── Landing dashboard: tabbed tables ────────────────────── */
+                <div className="flex-1 overflow-y-auto modern-scrollbar">
+                    <div className="max-w-5xl mx-auto px-6 pb-10">
+                        {/* Tab bar */}
+                        <div className="flex items-end justify-between border-b border-zinc-800 mt-4 mb-5">
+                            <div className="flex items-center gap-1">
+                                {([
+                                    { id: 'orchestrations', label: 'Orchestrations', count: orchestrations.length },
+                                    { id: 'active', label: 'Active', count: activeRuns.length },
+                                    { id: 'recent', label: 'Recent', count: null },
+                                    { id: 'all', label: 'All runs', count: null },
+                                ] as const).map(t => (
                                     <button
-                                        key={o.id}
-                                        onClick={() => selectOrchestration(o.id)}
-                                        className="p-4 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-colors text-left"
+                                        key={t.id}
+                                        onClick={() => setLandingTab(t.id)}
+                                        className={`px-4 py-2.5 text-xs font-medium border-b-2 -mb-px transition-colors ${
+                                            landingTab === t.id
+                                                ? 'text-zinc-100 border-blue-500'
+                                                : 'text-zinc-500 border-transparent hover:text-zinc-300'
+                                        }`}
                                     >
-                                        <span className="block text-sm text-zinc-200 font-medium truncate">{o.name}</span>
-                                        <span className="block text-[11px] text-zinc-500 mt-1 line-clamp-2 min-h-[2em]">
-                                            {o.description || 'No description'}
-                                        </span>
-                                        <span className="block text-[10px] text-zinc-600 mt-2">
-                                            {o.steps.length} step{o.steps.length === 1 ? '' : 's'}
-                                        </span>
+                                        {t.label}
+                                        {t.count !== null && t.count > 0 && (
+                                            <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] ${
+                                                t.id === 'active'
+                                                    ? 'bg-blue-500/20 text-blue-300'
+                                                    : 'bg-zinc-800 text-zinc-400'
+                                            }`}>{t.count}</span>
+                                        )}
                                     </button>
                                 ))}
+                            </div>
+                            {landingTab === 'orchestrations' && (
                                 <button
                                     onClick={createNew}
-                                    className="p-4 rounded-lg border border-dashed border-zinc-700 hover:border-zinc-500 text-zinc-500 hover:text-zinc-300 transition-colors text-sm flex items-center justify-center min-h-[92px]"
+                                    className="mb-2 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:border-zinc-500 rounded transition-colors"
                                 >
                                     + New orchestration
                                 </button>
-                            </div>
-                        </section>
+                            )}
+                        </div>
 
-                        {pastRuns.filter(r => r.status !== 'running' && r.status !== 'paused').length > 0 && (
-                            <section>
-                                <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
-                                    Recent runs
-                                </h3>
-                                <div className="space-y-1.5">
-                                    {pastRuns.filter(r => r.status !== 'running' && r.status !== 'paused').slice(0, 8).map(run => {
-                                        const orch = orchestrations.find(o => o.id === run.orchestration_id);
-                                        return (
-                                            <button
-                                                key={run.run_id}
-                                                onClick={() => restoreRun(run)}
-                                                className="w-full flex items-center gap-3 px-3 py-2 rounded bg-zinc-900/50 border border-zinc-800/50 hover:border-zinc-700 transition-colors text-left"
-                                            >
-                                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                                    run.status === 'completed' ? 'bg-green-500' :
-                                                    run.status === 'cancelled' ? 'bg-zinc-500' : 'bg-red-500'
-                                                }`} />
-                                                <span className="flex-1 min-w-0 text-xs text-zinc-300 truncate">
-                                                    {orch?.name ?? run.orchestration_id}
-                                                </span>
-                                                <span className="text-[10px] text-zinc-600 shrink-0">{run.status}</span>
-                                                {run.started_at && (
-                                                    <span className="text-[10px] text-zinc-600 shrink-0">
-                                                        {new Date(run.started_at).toLocaleString()}
-                                                    </span>
-                                                )}
-                                            </button>
-                                        );
-                                    })}
+                        {landingTab === 'orchestrations' && (
+                            <div className="border border-zinc-800 rounded-lg overflow-hidden bg-zinc-950/60">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-zinc-800 bg-zinc-900/40">
+                                                <th className={thCls}>Name</th>
+                                                <th className={thCls}>Description</th>
+                                                <th className={`${thCls} text-right`}>Steps</th>
+                                                <th className={`${thCls} text-right`}>Last run</th>
+                                                <th className={thCls}></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {orchestrations.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={5} className="px-4 py-10 text-center text-xs text-zinc-600 italic">
+                                                        No orchestrations yet — create one or build with AI.
+                                                    </td>
+                                                </tr>
+                                            ) : orchestrations.map(o => {
+                                                const lastRun = pastRuns.find(r => r.orchestration_id === o.id);
+                                                const lastMeta = lastRun ? runStatusMeta(lastRun) : null;
+                                                return (
+                                                    <tr
+                                                        key={o.id}
+                                                        onClick={() => selectOrchestration(o.id)}
+                                                        className="border-b border-zinc-800/60 last:border-b-0 hover:bg-zinc-900/70 cursor-pointer transition-colors group"
+                                                    >
+                                                        <td className={`${tdCls} text-zinc-200 font-medium whitespace-nowrap max-w-[240px]`}>
+                                                            <span className="block truncate">{o.name}</span>
+                                                        </td>
+                                                        <td className={`${tdCls} text-zinc-500 max-w-[380px]`}>
+                                                            <span className="block truncate">{o.description || '—'}</span>
+                                                        </td>
+                                                        <td className={`${tdCls} text-right text-zinc-400 whitespace-nowrap`}>
+                                                            {o.steps.length}
+                                                        </td>
+                                                        <td className={`${tdCls} text-right whitespace-nowrap`}>
+                                                            {lastRun && lastMeta ? (
+                                                                <span className="inline-flex items-center gap-1.5 justify-end">
+                                                                    <span className={`w-1.5 h-1.5 rounded-full ${lastMeta.dot}`} />
+                                                                    <span className="text-zinc-500">
+                                                                        {lastRun.started_at ? new Date(lastRun.started_at).toLocaleString() : lastMeta.label}
+                                                                    </span>
+                                                                </span>
+                                                            ) : <span className="text-zinc-600">never</span>}
+                                                        </td>
+                                                        <td className={`${tdCls} text-right whitespace-nowrap`}>
+                                                            <span className="text-[11px] text-zinc-600 group-hover:text-zinc-300 transition-colors">
+                                                                Open →
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
                                 </div>
-                            </section>
+                            </div>
+                        )}
+
+                        {landingTab === 'active' && renderRunsTable(
+                            activeRuns,
+                            'No active runs — start one from the Orchestrations tab.',
+                        )}
+
+                        {landingTab === 'recent' && renderRunsTable(
+                            pastRuns.filter(r => r.status !== 'running' && r.status !== 'paused').slice(0, 10),
+                            'No finished runs yet.',
+                        )}
+
+                        {landingTab === 'all' && renderRunsTable(
+                            allRuns.length > 0 ? allRuns : pastRuns,
+                            'No runs recorded yet.',
                         )}
                     </div>
                 </div>
@@ -1521,7 +1676,7 @@ function BottomPanel({
     onOpenResponseModal: (entry: { step_name: string; step_type?: string; content: string }) => void;
     runId: string | null;
     onResumeRun: () => void;
-    pastRuns: { run_id: string; orchestration_id: string; status: string; started_at?: string; ended_at?: string }[];
+    pastRuns: { run_id: string; orchestration_id: string; status: string; started_at?: string | null; ended_at?: string | null }[];
     onRestoreRun: (run: { run_id: string; orchestration_id: string; status: string }) => void;
 }) {
     const [activeSection, setActiveSection] = useState<'state' | 'guardrails' | 'run' | 'recent'>('run');

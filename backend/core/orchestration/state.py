@@ -71,12 +71,19 @@ class SharedState:
         for f in sorted(RUNS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
+                history = data.get("step_history") or []
                 runs.append({
                     "run_id": data.get("run_id"),
                     "orchestration_id": data.get("orchestration_id"),
                     "status": data.get("status"),
                     "started_at": data.get("started_at"),
                     "ended_at": data.get("ended_at"),
+                    # Live-progress fields for the runs table
+                    "current_step_id": data.get("current_step_id"),
+                    "steps_completed": len(history),
+                    "last_step_name": (history[-1].get("step_name") if history else None),
+                    "waiting_for_human": bool(data.get("waiting_for_human")),
+                    "total_cost_usd": data.get("total_cost_usd"),
                 })
             except Exception:
                 continue
