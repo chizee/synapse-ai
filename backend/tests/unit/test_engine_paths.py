@@ -106,3 +106,37 @@ class TestStepEdgeCases:
         )
         events = await _run(orch)
         assert any(e.get("type") == "step_warning" for e in events)
+
+
+class TestInitialCheckpoint:
+    async def test_run_file_exists_before_first_step_completes(self, tmp_path, monkeypatch):
+        """The run must be visible to /runs listings from second zero — the
+        checkpoint is written at run start, not first at the step boundary."""
+        import json as _json
+        import core.orchestration.state as state_mod
+        from core.models_orchestration import Orchestration
+        from core.orchestration.engine import OrchestrationEngine
+
+        monkeypatch.setattr(state_mod, "RUNS_DIR", tmp_path / "runs")
+        orch = S.make_orchestration(
+            id="orch_initial_ckpt",
+            entry_step_id="p",
+            steps=[{"id": "p", "name": "P", "type": "print", "print_content": "x",
+                    "output_key": "o", "next_step_id": None}],
+        )
+        engine = OrchestrationEngine(Orchestration.model_validate(orch), _server())
+        agen = engine.run("go", run_id="run_early")
+
+        # Consume ONLY orchestration_start — no step has run yet.
+        first = await agen.__anext__()
+        assert first["type"] == "orchestration_start"
+        ckpt = _json.loads((tmp_path / "runs" / "run_early.json").read_text(encoding="utf-8"))
+        assert ckpt["status"] == "running"
+        assert ckpt["current_step_id"] == "p"
+        assert ckpt["step_history"] == []
+
+        # Finish the run — the same file transitions to completed.
+        async for _ in agen:
+            pass
+        ckpt = _json.loads((tmp_path / "runs" / "run_early.json").read_text(encoding="utf-8"))
+        assert ckpt["status"] == "completed"
