@@ -8,7 +8,7 @@ Report privately through
 [GitHub Security Advisories](https://github.com/synapseorch-ai/synapse-ai/security/advisories/new),
 which creates a private thread visible only to the maintainers.
 
-If you cannot use GitHub advisories, email **nvenrj@gmail.com** with `SECURITY` in the subject.
+If you cannot use GitHub advisories, email **info@synapseorch.com** with `SECURITY` in the subject.
 
 Please include:
 
