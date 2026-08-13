@@ -10,9 +10,23 @@ that try to hit /api/settings, /api/agents, etc. directly will get 403.
 Rules:
 - /api/v1/*, /api/v2/*, ... → SKIP (external versioned API; uses API key auth instead)
 - /docs, /openapi.json, /redoc  → SKIP (FastAPI docs)
-- /chat*, /auth/*    → SKIP (direct backend routes, not under /api/)
-- /api/*             → REQUIRE X-Synapse-Internal header
-- If SYNAPSE_INTERNAL_TOKEN is not set → permissive (backward compatible)
+- /auth/*            → SKIP (OAuth redirects; browser-navigated, cannot carry a header)
+- /api/*, /chat*     → REQUIRE X-Synapse-Internal header
+- If SYNAPSE_INTERNAL_TOKEN is not set → LOOPBACK-ONLY: allow requests whose
+  direct peer is 127.0.0.1/::1 (local dev, same-container proxy) and 403 any
+  remote caller. This closes the unauthenticated-RCE hole on network-exposed
+  token-less deployments (GHSA-3j67-x3j8-r32x). Docker images auto-generate a
+  token (docker/entrypoint.sh) so they never rely on this fallback.
+
+Why /chat is gated even though it is not under /api/:
+  POST /chat and /chat/stream (core/routes/chat.py) run the full ReAct loop with
+  the complete tool surface — bash, execute_python, SQL, every MCP server. They
+  are mounted at the root, so the "not /api/ → skip" rule let any caller who
+  could reach the port drive them with no credentials at all.
+  The public, externally-authenticated chat API is /api/v1/chat (require_api_key)
+  — a different route. Root /chat is reached only by the Next.js route handler
+  (frontend/src/app/api/chat/**), which already sends X-Synapse-Internal via
+  backendHeaders(), so gating it is transparent to the UI.
 """
 import os
 import re
@@ -20,6 +34,27 @@ import re
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+# Direct-peer addresses treated as local. We deliberately check request.client
+# (the immediate TCP peer), NOT X-Forwarded-For, which is attacker-spoofable.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+# Root-mounted routes that are internal despite not living under /api/.
+# Matched as exact path or path-prefixed segment so /chat and /chat/stream are
+# both covered while an unrelated future route like /chatbot-docs is not.
+_INTERNAL_ROOT_PREFIXES = ("/chat",)
+
+
+def _is_loopback(request: Request) -> bool:
+    client = request.client
+    return bool(client) and client.host in _LOOPBACK_HOSTS
+
+
+def _is_internal_root_route(path: str) -> bool:
+    return any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in _INTERNAL_ROOT_PREFIXES
+    )
 
 
 class InternalTokenMiddleware(BaseHTTPMiddleware):
@@ -32,29 +67,48 @@ class InternalTokenMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # If no token configured, be permissive (local dev / backward compat)
-        if not self.token:
-            return await call_next(request)
+        # ── Skips run FIRST, independent of the internal token ──────────────────
+        # These routes are either externally authenticated (versioned API → API
+        # key) or intentionally public, so they must stay reachable even when the
+        # token is unset/loopback-gated. This lets external clients hit the open
+        # /api/v1|v2 API through the frontend proxy (or a directly-published
+        # backend port) without the internal frontend token.
 
-        # Skip: external versioned API routes (v1, v2, ...) — they use API key
-        # auth (require_api_key), not the internal frontend token. Match any
-        # /api/v<N> prefix so future versions are exempt automatically.
+        # External versioned API (v1, v2, ...) — uses require_api_key, not the
+        # internal token. Match any /api/v<N> prefix so future versions are exempt.
         if re.match(r"^/api/v\d+(/|$)", path):
             return await call_next(request)
 
-        # Skip: MCP OAuth callback — called by external OAuth providers, not frontend
+        # MCP OAuth callback — called by external OAuth providers, not the frontend.
         if path == "/api/mcp/oauth/callback":
             return await call_next(request)
 
-        # Skip: FastAPI docs
+        # FastAPI docs.
         if path in ("/docs", "/openapi.json", "/redoc"):
             return await call_next(request)
 
-        # Skip: non-API routes (chat, auth, health, websocket, etc.)
-        if not path.startswith("/api/"):
+        # Non-API routes (auth redirects, health, websocket, etc.) — EXCEPT the
+        # root-mounted internal routes, which are gated below. /chat drives the
+        # full agent tool surface and must never be reachable unauthenticated.
+        if not path.startswith("/api/") and not _is_internal_root_route(path):
             return await call_next(request)
 
-        # This is an /api/* route — require internal token
+        # ── Internal surface — /api/* plus the root-mounted internal routes.
+        # The sensitive routes (settings, agents, mcp/servers, chat, …) that rely
+        # on the internal token for protection ──────────────────────────────────
+        if not self.token:
+            # No token configured → permissive ONLY for loopback callers. A remote
+            # client hitting a token-less backend directly is rejected, so the
+            # internal surface is never exposed unauthenticated over the network
+            # even in a misconfigured/bare-metal deployment (GHSA-3j67-x3j8-r32x).
+            if _is_loopback(request):
+                return await call_next(request)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Forbidden: internal token not configured"},
+            )
+
+        # Token configured → require the matching header.
         provided = request.headers.get("X-Synapse-Internal", "")
         if provided != self.token:
             return JSONResponse(

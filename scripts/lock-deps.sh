@@ -57,6 +57,15 @@ compile() {
     local destination="$output"
     if [ "$CHECK_MODE" -eq 1 ]; then
         destination="$(mktemp)"
+        # Seed the temp file with the committed lock. `uv pip compile` reads its
+        # output file and preserves pins that still satisfy the spec, so writing
+        # to an EMPTY temp file resolved every package to its newest release
+        # instead. That made --check assert "every dependency is at its latest
+        # version right now" rather than "the lock is reproducible" — so it
+        # failed on every PR the moment anything upstream published, and
+        # regenerating could not fix it. Seeding makes check mode do exactly
+        # what a normal run does, which is the thing we actually want to verify.
+        cp "$output" "$destination"
     fi
 
     echo "==> $output"

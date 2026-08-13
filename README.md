@@ -64,6 +64,8 @@ docker run -d \
 
 Then open `http://localhost:3000`. See the [Docker guide](https://docs.synapseorch.com/getting-started/installation#docker) in the docs for custom ports and environment variable configuration.
 
+> **Security:** publish only the frontend port `3000` — the backend (`8765`) serves an internal API and should not be exposed on `0.0.0.0` (docker-compose binds it to `127.0.0.1`). The container auto-generates a shared internal token so that surface is authenticated by default. For any network-reachable deployment, enable **login** (Settings → Security) and/or set `allow_stdio_mcp=false`, since registering a stdio MCP server launches local commands.
+
 ### Upgrading
 
 | Install method | Upgrade command |
@@ -72,6 +74,8 @@ Then open `http://localhost:3000`. See the [Docker guide](https://docs.synapseor
 | pip | `pip install --upgrade synapse-orch-ai` |
 | npm | `npm update -g synapse-orch-ai` |
 | Docker | `docker pull synapseorchai/synapse-ai:latest` |
+
+> **Upgrade note (security hardening):** the backend now auto-generates a shared internal token and, under docker-compose, binds its port to `127.0.0.1` by default. The UI and its API are unaffected (the frontend proxies the backend internally). If you previously called the **backend directly** on `:8765` (e.g. external API clients), either point them at the frontend instead — `http://host:3000/api/v1|v2/...` — or set `SYNAPSE_BACKEND_BIND=0.0.0.0` in `.env` to keep publishing `:8765`.
 
 ---
 

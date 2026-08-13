@@ -205,13 +205,34 @@ def _get_native_mcp_servers(tools_dir: Path, backend_root: Path) -> dict:
 
 
 def _build_stdio_mcp_params(cfg: dict):
-    """Build StdioServerParameters from a saved mcp_servers.json config dict."""
+    """Build StdioServerParameters from a saved mcp_servers.json config dict.
+
+    Returns None when this deployment must not spawn user-supplied stdio servers.
+    Workers run in scale mode, where ``stdio_mcp_allowed()`` is force-disabled —
+    this is a second, independent spawn sink from
+    ``MCPClientManager.connect_stdio_server``, so it needs its own gate rather
+    than inheriting one.
+    """
     import shlex
     from mcp import StdioServerParameters
+    from core.mcp_client import stdio_mcp_allowed, check_stdio_command_allowed
 
     command = cfg.get("command", "")
     if not command:
         return None
+
+    if not stdio_mcp_allowed():
+        print(f"[worker] Refusing to spawn stdio MCP server "
+              f"'{cfg.get('name', '?')}': stdio MCP is disabled on this deployment.",
+              flush=True)
+        return None
+    try:
+        check_stdio_command_allowed(command)
+    except ValueError as e:
+        print(f"[worker] Refusing to spawn stdio MCP server "
+              f"'{cfg.get('name', '?')}': {e}", flush=True)
+        return None
+
     args_raw = cfg.get("args", [])
     # Support both list and space-separated string for args
     if isinstance(args_raw, str):
