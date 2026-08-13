@@ -262,6 +262,24 @@ class MCPClientManager:
             print(f"Skipping '{name}': no command")
             return None
 
+        # Gate at the sink, not only at the callers. Spawning a stdio server is
+        # arbitrary local command execution, so the check belongs on the code
+        # path that actually spawns — otherwise any new (or overlooked) call site
+        # silently bypasses it. POST /api/import did exactly that: it wrote a
+        # bundle's MCP configs to disk and called this method directly, skipping
+        # the add_server/reconnect_server/connect_all gates entirely.
+        if not stdio_mcp_allowed():
+            print(f"[MCP] Refusing to spawn stdio server '{name}': "
+                  f"stdio MCP servers are disabled on this deployment.")
+            self._set_status(name, "disconnected")
+            return None
+        try:
+            check_stdio_command_allowed(command)
+        except ValueError as e:
+            print(f"[MCP] Refusing to spawn stdio server '{name}': {e}")
+            self._set_status(name, "disconnected")
+            return None
+
         env = os.environ.copy()
         env.update(env_vars)
 
